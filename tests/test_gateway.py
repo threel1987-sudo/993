@@ -35,7 +35,7 @@ class DummyPersonaEngine:
     model = "dummy-persona"
     api_key = "dummy"
 
-    async def update_from_user_message(self, session_id: str, user_message: str) -> dict:
+    def _state(self) -> dict:
         return {
             "personality": {
                 "openness": 0.56,
@@ -53,6 +53,12 @@ class DummyPersonaEngine:
             },
             "reply_guidance": "Be warm and steady.",
         }
+
+    async def update_from_user_message(self, session_id: str, user_message: str) -> dict:
+        return self._state()
+
+    def get_current_state(self, session_id: str) -> dict:
+        return self._state()
 
     def format_state_block(self, state: dict) -> str:
         return (
@@ -177,6 +183,14 @@ def _gateway_config(test_config: dict, **overrides) -> dict:
     return cfg
 
 
+def _joined_message_content(messages: list[dict]) -> str:
+    return "\n\n".join(
+        str(message.get("content") or "")
+        for message in messages
+        if isinstance(message, dict)
+    )
+
+
 def test_gateway_state_store_cooldown_curve(tmp_path):
     store = GatewayStateStore(str(tmp_path / "gateway_state.db"))
     origin = datetime(2026, 4, 20, 12, 0, 0)
@@ -254,8 +268,10 @@ def test_gateway_accepts_anthropic_messages(monkeypatch, test_config, bucket_mgr
     assert forwarded["stream"] is False
     assert forwarded["messages"][0] == {"role": "system", "content": "你是一个自然聊天助手。"}
     assert forwarded["messages"][1]["role"] == "system"
-    assert "Current Inner State" in forwarded["messages"][1]["content"]
-    assert forwarded["messages"][2] == {"role": "user", "content": "今天怎么样？"}
+    assert "Core Memory" in forwarded["messages"][1]["content"]
+    assert forwarded["messages"][2]["role"] == "user"
+    assert "Current Inner State" in forwarded["messages"][2]["content"]
+    assert forwarded["messages"][2]["content"].endswith("今天怎么样？")
     assert state_store.get_recent_bucket_ids("sess-anthropic", 5) == set()
 
 
@@ -275,10 +291,13 @@ def test_gateway_defaults_anthropic_session_id(monkeypatch, test_config, bucket_
                 "messages": [{"role": "user", "content": "你好"}],
                 "max_tokens": 128,
             },
-        )
+    )
 
     assert response.status_code == 200
-    assert captured[0]["json"]["messages"][-1] == {"role": "user", "content": "你好"}
+    last_message = captured[0]["json"]["messages"][-1]
+    assert last_message["role"] == "user"
+    assert "Current Inner State" in last_message["content"]
+    assert last_message["content"].endswith("你好")
     assert state_store.get_recent_bucket_ids("xiaoyu-main", 5) == set()
 
 
@@ -828,24 +847,28 @@ def test_gateway_skips_persona_reanalysis_on_tool_continuation(monkeypatch, test
     monkeypatch.setenv("OMBRE_GATEWAY_UPSTREAM_API_KEY", "upstream-secret")
 
     persona_engine = RecordingPersonaEngine()
+    captured = []
+
+    def upstream_handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
     state_store = GatewayStateStore(f"{test_config['buckets_dir']}\\gateway_state.db")
     http_client = httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200,
-                json={
-                    "id": "chatcmpl-test",
-                    "object": "chat.completion",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "ok"},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                },
-            )
-        ),
+        transport=httpx.MockTransport(upstream_handler),
         timeout=10.0,
     )
     service = GatewayService(
@@ -892,12 +915,11 @@ def test_gateway_skips_persona_reanalysis_on_tool_continuation(monkeypatch, test
         )
 
     assert response.status_code == 200
-    assert persona_engine.calls == [
-        {
-            "session_id": "sess-tool-continuation",
-            "user_message": "",
-        }
-    ]
+    assert persona_engine.calls == []
+    roles = [message["role"] for message in captured[0]["messages"]]
+    assert roles == ["system", "system", "user", "assistant", "tool"]
+    assert "Core Memory" in captured[0]["messages"][0]["content"]
+    assert "Current Inner State" in captured[0]["messages"][1]["content"]
 
 
 def test_gateway_restores_reasoning_content_for_tool_continuation(monkeypatch, test_config, bucket_mgr):
@@ -1298,17 +1320,22 @@ def test_gateway_injects_after_existing_system_message(monkeypatch, test_config,
     assert forwarded["model"] == "gateway-default-model"
     assert forwarded["messages"][0]["content"] == "你是一个自然聊天助手。"
     assert forwarded["messages"][1]["role"] == "system"
+    assert forwarded["messages"][2]["role"] == "user"
+    assert forwarded["messages"][2]["content"].endswith("猫咪最近又干了什么？")
 
-    injected = forwarded["messages"][1]["content"]
-    assert "Core Memory" in injected
-    assert "Recent Context" in injected
-    assert "Recalled Memory" in injected
-    assert injected.index("Current Inner State") < injected.index("Core Memory")
-    assert "核心准则" in injected
-    assert "昨晚电影" in injected
-    assert "猫咪偷鱼" in injected
-    assert "新猫粮" in injected
-    assert "已解决论文" not in injected
+    stable = forwarded["messages"][1]["content"]
+    dynamic = forwarded["messages"][2]["content"]
+    assert "Core Memory" in stable
+    assert "Recent Context" not in stable
+    assert "Recalled Memory" not in stable
+    assert "Current Inner State" in dynamic
+    assert "Recent Context" in dynamic
+    assert "Recalled Memory" in dynamic
+    assert "核心准则" in stable
+    assert "昨晚电影" in dynamic
+    assert "猫咪偷鱼" in dynamic
+    assert "新猫粮" in dynamic
+    assert "已解决论文" not in stable + dynamic
     assert state_store.get_recent_bucket_ids("sess-inject", 5) == {cat_a}
 
 
@@ -1341,10 +1368,10 @@ def test_gateway_accepts_timezone_aware_bucket_timestamps(monkeypatch, test_conf
                 "X-Ombre-Session-Id": "sess-aware-time",
             },
             json={"messages": [{"role": "user", "content": "看看最近发生了什么"}]},
-        )
+    )
 
     assert response.status_code == 200
-    injected = captured[0]["json"]["messages"][0]["content"]
+    injected = _joined_message_content(captured[0]["json"]["messages"])
     assert "时区时间桶" in injected
 
 
@@ -1363,8 +1390,10 @@ def test_gateway_injects_when_no_system_message(monkeypatch, test_config, bucket
     assert response.status_code == 200
     messages = captured[0]["json"]["messages"]
     assert messages[0]["role"] == "system"
-    assert "Current Inner State" in messages[0]["content"]
+    assert "Core Memory" in messages[0]["content"]
     assert messages[1]["role"] == "user"
+    assert "Current Inner State" in messages[1]["content"]
+    assert messages[1]["content"].endswith("今天怎么样")
 
 
 def test_recent_round_skip_prefers_unseen_candidate(monkeypatch, test_config, bucket_mgr):
@@ -1412,7 +1441,7 @@ def test_recent_round_skip_prefers_unseen_candidate(monkeypatch, test_config, bu
         )
 
     assert response.status_code == 200
-    injected = captured[0]["json"]["messages"][0]["content"]
+    injected = _joined_message_content(captured[0]["json"]["messages"])
     assert "床边玩具" in injected
     assert "纸箱小橘" not in injected
     assert "猫抓板" not in injected
@@ -1452,7 +1481,7 @@ def test_recent_round_skip_fallback_keeps_cooldown(monkeypatch, test_config, buc
                 "sess-fallback",
             )
         )
-    injected = payload["messages"][0]["content"]
+    injected = _joined_message_content(payload["messages"])
 
     assert recalled_ids
     assert any(bucket_id in {cat_a, cat_b} for bucket_id in recalled_ids)

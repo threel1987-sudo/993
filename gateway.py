@@ -197,6 +197,12 @@ class GatewayService:
 
         upstream_response = await self._forward_upstream(forward_payload)
         if 200 <= upstream_response.status_code < 300:
+            self._log_cache_usage_from_response(
+                session_id,
+                forward_payload["model"],
+                upstream_response,
+                route="/v1/chat/completions",
+            )
             self._capture_reasoning_from_response(session_id, upstream_response)
             await self._record_successful_round(session_id, recalled_ids)
 
@@ -245,6 +251,12 @@ class GatewayService:
 
         upstream_response = await self._forward_upstream(forward_payload)
         if 200 <= upstream_response.status_code < 300:
+            self._log_cache_usage_from_response(
+                session_id,
+                forward_payload["model"],
+                upstream_response,
+                route="/v1/messages",
+            )
             self._capture_reasoning_from_response(session_id, upstream_response)
             await self._record_successful_round(session_id, recalled_ids)
             return self._openai_response_to_anthropic(upstream_response, forward_payload["model"])
@@ -284,13 +296,16 @@ class GatewayService:
         all_buckets = await self.bucket_mgr.list_all(include_archive=False)
         query = self._extract_last_user_query(messages)
         persona_query = self._extract_current_turn_user_query(messages)
-        persona_state = await self.persona_engine.update_from_user_message(session_id, persona_query)
+        if persona_query:
+            persona_state = await self.persona_engine.update_from_user_message(session_id, persona_query)
+        else:
+            persona_state = self.persona_engine.get_current_state(session_id)
         persona_block = self.persona_engine.format_state_block(persona_state)
         core_memory = await self._build_core_memory_block(all_buckets)
         recent_context = await self._build_recent_context_block(all_buckets)
         recalled_buckets = await self._select_dynamic_buckets(query, session_id, all_buckets)
         recalled_memory = await self._summarize_buckets(recalled_buckets, self.recalled_budget)
-        injected_message = self._build_injected_memory_message(
+        stable_context, dynamic_context = self._build_injected_context_messages(
             persona_block=persona_block,
             core_memory=core_memory,
             recent_context=recent_context,
@@ -300,9 +315,10 @@ class GatewayService:
         forward_payload = deepcopy(payload)
         forward_payload["model"] = model
         self._restore_cached_reasoning_content(session_id, forward_payload.get("messages"))
-        forward_payload["messages"] = self._inject_system_message(
+        forward_payload["messages"] = self._inject_context_messages(
             forward_payload["messages"],
-            injected_message,
+            stable_context,
+            dynamic_context,
         )
         forward_payload["stream"] = payload.get("stream") is True
         return forward_payload, [bucket["id"] for bucket in recalled_buckets]
@@ -412,6 +428,12 @@ class GatewayService:
             finally:
                 await upstream_response.aclose()
                 if completed:
+                    self._log_cache_usage_from_stream_state(
+                        session_id,
+                        model,
+                        stream_state,
+                        route="/v1/chat/completions",
+                    )
                     self._capture_reasoning_from_stream_state(session_id, stream_state)
                     await self._record_successful_round(session_id, recalled_ids)
 
@@ -434,6 +456,56 @@ class GatewayService:
             session_id,
             round_id,
             recalled_ids,
+        )
+
+    def _log_cache_usage_from_response(
+        self,
+        session_id: str,
+        model: str,
+        upstream_response: httpx.Response,
+        route: str,
+    ) -> None:
+        try:
+            body = upstream_response.json()
+        except ValueError:
+            return
+        usage = body.get("usage") if isinstance(body, dict) else None
+        if isinstance(usage, dict):
+            self._log_cache_usage(session_id, model, route, usage)
+
+    def _log_cache_usage_from_stream_state(
+        self,
+        session_id: str,
+        model: str,
+        stream_state: dict[str, Any],
+        route: str,
+    ) -> None:
+        usage = stream_state.get("usage")
+        if isinstance(usage, dict):
+            self._log_cache_usage(session_id, model, route, usage)
+
+    def _log_cache_usage(self, session_id: str, model: str, route: str, usage: dict[str, Any]) -> None:
+        hit = usage.get("prompt_cache_hit_tokens")
+        miss = usage.get("prompt_cache_miss_tokens")
+        prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
+        prompt_details = usage.get("prompt_tokens_details")
+        cached_tokens = None
+        if isinstance(prompt_details, dict):
+            cached_tokens = prompt_details.get("cached_tokens")
+
+        if hit is None and miss is None and cached_tokens is None:
+            return
+
+        logger.info(
+            "Gateway upstream cache usage | session=%s model=%s route=%s "
+            "prompt_tokens=%s prompt_cache_hit_tokens=%s prompt_cache_miss_tokens=%s cached_tokens=%s",
+            session_id,
+            model,
+            route,
+            prompt_tokens,
+            hit,
+            miss,
+            cached_tokens,
         )
 
     def _proxy_response(self, upstream_response: httpx.Response) -> Response:
@@ -897,6 +969,12 @@ class GatewayService:
             finally:
                 await upstream_response.aclose()
                 if completed:
+                    self._log_cache_usage_from_stream_state(
+                        session_id,
+                        model,
+                        stream_state,
+                        route="/v1/messages",
+                    )
                     self._capture_reasoning_from_stream_state(session_id, stream_state)
                     await self._record_successful_round(session_id, recalled_ids)
 
@@ -1287,21 +1365,24 @@ class GatewayService:
             truncated = self._trim_text(cleaned, 90)
             return f"📌 记忆桶: {title}\n{truncated}"
 
-    def _build_injected_memory_message(
+    def _build_injected_context_messages(
         self,
         persona_block: str,
         core_memory: str,
         recent_context: str,
         recalled_memory: str,
-    ) -> str:
-        sections = [
+    ) -> tuple[str, str]:
+        stable_sections = [
             "Use the following private memory only when it fits naturally. "
             "Keep the reply seamless and do not mention memory lookup, search, or hidden context.",
             "",
-            persona_block,
-            "",
             "Core Memory",
             core_memory or "(none)",
+        ]
+        dynamic_sections = [
+            "Live private context for the current turn. Use it quietly when relevant.",
+            "",
+            persona_block,
             "",
             "Recent Context",
             recent_context or "(none)",
@@ -1309,17 +1390,82 @@ class GatewayService:
             "Recalled Memory",
             recalled_memory or "(none)",
         ]
-        injected = "\n".join(sections).strip()
-        if count_tokens_approx(injected) > self.inject_total_budget:
-            injected = self._trim_text(injected, self.inject_total_budget)
-        return injected
+        stable_context = "\n".join(stable_sections).strip()
+        dynamic_context = "\n".join(dynamic_sections).strip()
+        stable_tokens = count_tokens_approx(stable_context)
+        dynamic_tokens = count_tokens_approx(dynamic_context)
+        if stable_tokens + dynamic_tokens <= self.inject_total_budget:
+            return stable_context, dynamic_context
+        if stable_tokens >= self.inject_total_budget:
+            return self._trim_text(stable_context, self.inject_total_budget), ""
+        remaining = max(0, self.inject_total_budget - stable_tokens)
+        return stable_context, self._trim_text(dynamic_context, remaining)
 
-    def _inject_system_message(self, messages: list[dict], injected_message: str) -> list[dict]:
+    def _inject_context_messages(
+        self,
+        messages: list[dict],
+        stable_context: str,
+        dynamic_context: str,
+    ) -> list[dict]:
         new_messages = deepcopy(messages)
-        memory_message = {"role": "system", "content": injected_message}
-        if new_messages and isinstance(new_messages[0], dict) and new_messages[0].get("role") == "system":
-            return [new_messages[0], memory_message, *new_messages[1:]]
-        return [memory_message, *new_messages]
+        if stable_context.strip():
+            stable_message = {"role": "system", "content": stable_context}
+            if new_messages and isinstance(new_messages[0], dict) and new_messages[0].get("role") == "system":
+                new_messages.insert(1, stable_message)
+            else:
+                new_messages.insert(0, stable_message)
+        if dynamic_context.strip():
+            current_user_index = self._current_turn_user_index(new_messages)
+            if current_user_index is not None:
+                new_messages[current_user_index] = self._prepend_dynamic_context_to_user_message(
+                    new_messages[current_user_index],
+                    dynamic_context,
+                )
+            else:
+                dynamic_message = {"role": "system", "content": dynamic_context}
+                insert_at = self._after_leading_system_index(new_messages)
+                new_messages.insert(insert_at, dynamic_message)
+        return new_messages
+
+    def _current_turn_user_index(self, messages: list[dict]) -> int | None:
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if role == "system":
+                continue
+            if role == "user":
+                return index
+            return None
+        return None
+
+    def _after_leading_system_index(self, messages: list[dict]) -> int:
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict) or message.get("role") != "system":
+                return index
+        return len(messages)
+
+    def _prepend_dynamic_context_to_user_message(
+        self,
+        message: dict[str, Any],
+        dynamic_context: str,
+    ) -> dict[str, Any]:
+        updated = deepcopy(message)
+        prefix = (
+            "<ombre_live_context>\n"
+            f"{dynamic_context}\n"
+            "</ombre_live_context>\n\n"
+            "Current user message:\n"
+        )
+        content = updated.get("content")
+        if isinstance(content, str):
+            updated["content"] = prefix + content
+        elif isinstance(content, list):
+            updated["content"] = [{"type": "text", "text": prefix}, *deepcopy(content)]
+        else:
+            updated["content"] = prefix
+        return updated
 
     def _restore_cached_reasoning_content(self, session_id: str, messages: Any) -> None:
         if not isinstance(messages, list) or not any(
@@ -1444,6 +1590,7 @@ class GatewayService:
                 "content": "",
                 "reasoning_content": "",
             },
+            "usage": {},
             "tool_calls_by_index": {},
         }
 
@@ -1490,6 +1637,9 @@ class GatewayService:
 
         if not isinstance(event, dict):
             return
+        usage = event.get("usage")
+        if isinstance(usage, dict):
+            stream_state["usage"].update(usage)
         for choice in event.get("choices", []):
             if not isinstance(choice, dict):
                 continue
