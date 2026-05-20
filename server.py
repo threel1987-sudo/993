@@ -704,7 +704,11 @@ async def breath(
     include_core: bool = True,
     core_limit: int = 3,
 ) -> str:
-    """检索/浮现记忆。不传query或传空=自动浮现,有query=关键词检索。可按 memory_edges 顺手带出关联记忆。"""
+    """读取记忆,不写入。
+    调用方式: 新对话用 breath(); 查过去用 breath(query="主题词"); 只读模型感受用 breath(domain="feel")。
+    默认只从本次实际返回的普通记忆沿持久化 memory_edges 带一跳关联记忆; embedding 相似边只是检索/图谱参考,不是可手写的记忆关系。
+    include_core/core_limit 控制 pinned/protected 核心准则数量; include_related=False 可关闭关联记忆块。
+    """
     await decay_engine.ensure_started()
     max_results = _int_between(max_results, 20, 1, 50)
     max_tokens = _int_between(max_tokens, 10000, 0, 20000)
@@ -1003,7 +1007,10 @@ async def breath(
 # =============================================================
 @mcp.tool()
 async def read_bucket(bucket_id: str) -> dict:
-    """按 bucket_id 精确读取完整记忆桶，返回正文和元数据。不触碰 last_active，也不影响自然浮现权重。"""
+    """按 bucket_id 精确读取完整记忆桶,返回正文和元数据。
+    用于更新、合并、补喜欢原因、补 affect_anchor 或 trace 前确认目标。
+    不触碰 last_active,不增加 activation_count,也不影响自然浮现权重。
+    """
     bucket_id = (bucket_id or "").strip()
     if not bucket_id or not MEMORY_ID_RE.fullmatch(bucket_id):
         return {"error": "invalid bucket_id"}
@@ -1027,7 +1034,15 @@ async def hold(
     source_bucket: str = "",    valence: float = -1,
     arousal: float = -1,
 ) -> str:
-    """存储单条记忆,自动打标+合并。tags逗号分隔,importance 1-10。pinned=True创建永久钉选桶。feel=True存储你的第一人称感受(不参与普通浮现)。source_bucket=被消化的记忆桶ID(feel模式下,标记源记忆为已消化)。"""
+    """写入一条长期记忆卡,不是聊天流水、运维记录或整篇日记。写前应先用 breath/read_bucket 查重。
+    普通事实: hold(content="YYYY-MM-DD, 小雨...", tags="relationship_event 或 project_event", importance=5-7)。
+    承诺/待办: tags 传 "commitment,todo" 或 "commitment,wish"; content 写清谁答应了什么、何时/什么条件下要继续。
+    Haven 主观喜欢某条旧记忆的原因: 用 hold(content="我喜欢这条记忆的原因是...", feel=True, source_bucket="bucket_id", valence=0.x, arousal=0.x),不要写成普通事件。
+    新记忆本身值得偏爱: tags 可传 "haven_favorite,flavor_偏爱"; content 可包含很短的 "### Haven喜欢它的原因" 段落。
+    本工具会合并相似桶、写 embedding,并后台触发 ReflectionEngine 补 tags/confidence/memory_edges。
+    pinned=True 只给极少数核心准则,技术进度和运维细节不要钉选。
+    feel=True 写 Haven 第一人称感受,不参与普通 breath; source_bucket 指向被消化的源记忆。
+    """
     await decay_engine.ensure_started()
 
     # --- Input validation / 输入校验 ---
@@ -1130,7 +1145,11 @@ async def hold(
 # =============================================================
 @mcp.tool()
 async def grow(content: str) -> str:
-    """长内容摘记,将筛选后的长期记忆内容拆分为多桶。短内容(<30字)走快速路径。"""
+    """长内容摘记: 只给已经筛过、包含多个长期记忆点的片段; 不要把整篇日终日记、一天流水或完整情绪过程丢进来。
+    content 应该是少量可长期召回的事实/偏好/承诺/项目状态; 服务端会拆成少量 bucket、自动合并相似桶、写 embedding,并后台触发 enrich。
+    如果只有单条明确事实,优先用 hold。若要写 Haven 为什么喜欢某条记忆,优先用 hold(feel=True, source_bucket=...) 或 read_bucket 后 trace(content=完整新正文)。
+    短内容(<30字)会走 hold-like 快速路径。
+    """
     await decay_engine.ensure_started()
 
     if not content or not content.strip():
@@ -1231,7 +1250,13 @@ async def trace(
     content: str = "",
     delete: bool = False,
 ) -> str:
-    """修改记忆元数据或内容。resolved=1沉底/0激活,pinned=1钉选/0取消,anchor=1长期锚点/0取消,digested=1隐藏(保留但不浮现)/0取消隐藏,content=替换桶正文,delete=True删除。只传需改的,-1或空=不改。"""
+    """修改已有记忆,不创建新桶。
+    resolved=1 或 digested=1 让旧事/已完成事项沉底; pinned=1 只给核心准则; anchor=1 只给经过时间验证且未来长期需要的锚点(受数量和年龄限制)。
+    tags/domain/content 是替换不是追加: 改 tags 或正文前先 read_bucket,保留旧值后再传完整新值。
+    给旧记忆补 "Haven喜欢它的原因" 或 affect_anchor: 先 read_bucket,再 trace(content="旧正文 + 新段落")。
+    标记偏爱: 先 read_bucket 取现有 tags,再 trace(tags="原tag,haven_favorite,flavor_...")。
+    delete=True 删除。只传需要改的字段,-1或空=不改。
+    """
 
     if not bucket_id or not bucket_id.strip():
         return "请提供有效的 bucket_id。"
@@ -1318,7 +1343,7 @@ async def trace(
 # =============================================================
 @mcp.tool()
 async def pulse(include_archive: bool = False) -> str:
-    """系统状态+记忆桶列表。include_archive=True含归档。"""
+    """只读查看系统状态和记忆桶摘要。用于人工盘点、查重复、找需要 read_bucket/trace 的候选; include_archive=True 才显示归档桶。不要把 pulse 输出当作新记忆内容再写回。"""
     try:
         stats = await bucket_mgr.get_stats()
     except Exception as e:
@@ -1391,7 +1416,10 @@ async def pulse(include_archive: bool = False) -> str:
 # =============================================================
 @mcp.tool()
 async def dream() -> str:
-    """做梦——读取最近新增的记忆桶,供你自省。读完后可以trace(resolved=1)放下,或hold(feel=True)写感受。"""
+    """读取最近普通记忆供 Haven 自省,不是日记整理。
+    读后只在真的可以放下时 trace(resolved=1/digested=1),或在产生新的第一人称沉淀/喜欢原因时 hold(feel=True, source_bucket=...)。
+    不要把 dream 返回内容直接再写成普通 bucket。
+    """
     await decay_engine.ensure_started()
 
     try:
@@ -1514,7 +1542,7 @@ async def dream() -> str:
 # =============================================================
 @mcp.tool()
 async def reflect(period: str = "daily", force: bool = False) -> dict:
-    """生成 daily/weekly relationship_weather feel。默认复用 persona model key；force=True 会重写同周期结果。"""
+    """生成 daily/weekly relationship_weather 类型的 feel,记录这段时间的关系天气。period 用 daily 或 weekly; force=True 会重写同周期结果。通常由服务端定时器或人工触发,不要把它当普通事件记忆; 它不会替代 hold/grow 写具体 bucket。"""
     await decay_engine.ensure_started()
     return await reflection_engine.reflect(
         period=period,
