@@ -942,7 +942,7 @@
   .flow-step.active { border-color: var(--accent); color: var(--accent); }
   .flow-arrow { color: var(--text-light); font-size: 16px; }
 
-  .reflection-shell { max-width: 980px; margin: 0 auto; }
+  .reflection-shell { max-width: 1120px; margin: 0 auto; }
   .reflection-toolbar {
     display: flex;
     align-items: center;
@@ -981,15 +981,15 @@
   .reflection-entry button:hover { border-color: var(--accent); }
   .reflection-board {
     display: grid;
-    grid-template-columns: minmax(250px, 320px) minmax(0, 1fr);
-    gap: 14px;
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    gap: 18px;
     align-items: start;
   }
   .reflection-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 20px;
-    padding: 18px;
+    padding: 20px;
     box-shadow: 6px 6px 16px var(--shadow-dark-subtle), -6px -6px 16px var(--shadow-light);
   }
   .reflection-card-head {
@@ -1013,8 +1013,8 @@
     font-weight: 500;
   }
   .reflection-month-controls .reflection-nav-button {
-    width: 32px;
-    height: 32px;
+    width: 34px;
+    height: 34px;
     padding: 0;
     border-radius: 999px;
   }
@@ -1041,7 +1041,7 @@
     color: var(--text-dim);
     cursor: pointer;
     font: inherit;
-    font-size: 15px;
+    font-size: 16px;
     padding: 0;
     box-shadow: none;
     transition: transform 0.16s ease;
@@ -1076,7 +1076,7 @@
     border-color: rgba(255,255,255,0.88);
   }
   .reflection-day-panel {
-    height: 360px;
+    height: 420px;
     margin-top: 0;
     overflow-y: auto;
   }
@@ -1178,7 +1178,7 @@
   <h1>◐ Ombre Brain</h1>
   <span class="stats" id="stats">loading...</span>
   <div class="search-bar">
-    <input type="text" id="search-input" placeholder="搜索记忆…" />
+    <input type="search" id="search-input" name="ombre-memory-query" placeholder="搜索记忆…" autocomplete="off" spellcheck="false" />
   </div>
   <button onclick="doLogout()" title="退出登录" style="background:none;border:1px solid var(--border);color:var(--text-dim);border-radius:20px;padding:7px 14px;font-size:12px;cursor:pointer;">退出</button>
 </div>
@@ -1412,13 +1412,13 @@
     <p style="color:var(--text-dim);font-size:13px;margin-bottom:24px;" id="auth-subtitle">验证身份</p>
     <div id="auth-setup-form" style="display:none;">
       <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;">首次使用，请设置访问密码</p>
-      <input type="password" id="auth-setup-pwd" placeholder="设置密码（至少6位）" style="display:block;width:100%;padding:10px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface-solid);color:var(--text);font-size:14px;margin-bottom:10px;" />
-      <input type="password" id="auth-setup-pwd2" placeholder="确认密码" style="display:block;width:100%;padding:10px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface-solid);color:var(--text);font-size:14px;margin-bottom:16px;" onkeydown="if(event.key==='Enter')doSetup()" />
-      <button onclick="doSetup()" style="width:100%;padding:12px;background:var(--accent);color:#fff;border:none;border-radius:10px;font-size:14px;cursor:pointer;">设置密码并进入</button>
+      <input type="password" id="auth-setup-pwd" name="ombre-new-password" placeholder="设置密码（至少6位）" autocomplete="new-password" style="display:block;width:100%;padding:10px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface-solid);color:var(--text);font-size:14px;margin-bottom:10px;" />
+      <input type="password" id="auth-setup-pwd2" name="ombre-new-password-confirm" placeholder="确认密码" autocomplete="new-password" style="display:block;width:100%;padding:10px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface-solid);color:var(--text);font-size:14px;margin-bottom:16px;" onkeydown="if(event.key==='Enter')doSetup()" />
+      <button type="button" onclick="doSetup()" style="width:100%;padding:12px;background:var(--accent);color:#fff;border:none;border-radius:10px;font-size:14px;cursor:pointer;">设置密码并进入</button>
     </div>
     <div id="auth-login-form" style="display:none;">
-      <input type="password" id="auth-login-pwd" placeholder="输入访问密码" style="display:block;width:100%;padding:10px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface-solid);color:var(--text);font-size:14px;margin-bottom:16px;" onkeydown="if(event.key==='Enter')doLogin()" />
-      <button onclick="doLogin()" style="width:100%;padding:12px;background:var(--accent);color:#fff;border:none;border-radius:10px;font-size:14px;cursor:pointer;">登录</button>
+      <input type="password" id="auth-login-pwd" name="ombre-current-password" placeholder="输入访问密码" autocomplete="current-password" style="display:block;width:100%;padding:10px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface-solid);color:var(--text);font-size:14px;margin-bottom:16px;" onkeydown="if(event.key==='Enter')doLogin()" />
+      <button type="button" onclick="doLogin()" style="width:100%;padding:12px;background:var(--accent);color:#fff;border:none;border-radius:10px;font-size:14px;cursor:pointer;">登录</button>
     </div>
     <div id="auth-error" style="color:var(--negative);font-size:13px;margin-top:12px;display:none;"></div>
   </div>
@@ -1460,6 +1460,15 @@ function showAuthOverlay(setupNeeded) {
   document.getElementById('auth-overlay').style.display = 'flex';
 }
 
+function clearAuthSensitiveFields(password) {
+  ['auth-login-pwd', 'auth-setup-pwd', 'auth-setup-pwd2'].forEach(function(id) {
+    var input = document.getElementById(id);
+    if (input) input.value = '';
+  });
+  var search = document.getElementById('search-input');
+  if (search && password && search.value === password) search.value = '';
+}
+
 async function checkAuth() {
   try {
     const response = await fetch(authUrl('/auth/status'));
@@ -1492,6 +1501,7 @@ async function doSetup() {
   });
   if (response.ok) {
     document.getElementById('auth-overlay').style.display = 'none';
+    clearAuthSensitiveFields(p1);
     loadBuckets();
     return;
   }
@@ -1508,6 +1518,8 @@ async function doLogin() {
   });
   if (response.ok) {
     document.getElementById('auth-overlay').style.display = 'none';
+    clearAuthSensitiveFields(password);
+    setTimeout(function() { clearAuthSensitiveFields(password); }, 80);
     loadBuckets();
     return;
   }
