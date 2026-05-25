@@ -2986,12 +2986,12 @@ async def api_config_get(request):
             "skip_recent_rounds": gateway_cfg.get("skip_recent_rounds", 5),
         },
         "dream": {
-            "enabled": dream_cfg.get("enabled", True),
-            "auto_enabled": dream_cfg.get("auto_enabled", True),
-            "surface_enabled": dream_cfg.get("surface_enabled", True),
-            "model": dream_cfg.get("model", ""),
-            "base_url": dream_cfg.get("base_url", ""),
-            "api_key_masked": _mask_key(dream_cfg.get("api_key", "")),
+            "enabled": dream_engine.enabled,
+            "auto_enabled": dream_engine.auto_enabled,
+            "surface_enabled": dream_engine.surface_enabled,
+            "model": dream_engine.model,
+            "base_url": dream_engine.base_url,
+            "api_key_masked": _mask_key(dream_engine.api_key),
             "api_ready": bool(dream_engine.api_key),
             "temperature": dream_cfg.get("temperature", 0.85),
             "max_tokens": dream_cfg.get("max_tokens", 900),
@@ -3200,6 +3200,15 @@ async def api_config_update(request):
             with open(config_path, "w", encoding="utf-8") as f:
                 yaml.dump(save_config, f, default_flow_style=False, allow_unicode=True)
             updated.append("persisted_to_yaml")
+            if os.path.exists(runtime_config_path):
+                runtime_config = {}
+                with open(runtime_config_path, "r", encoding="utf-8") as f:
+                    runtime_config = yaml.safe_load(f) or {}
+                runtime_config = _apply_dashboard_config(runtime_config)
+                os.makedirs(os.path.dirname(runtime_config_path), exist_ok=True)
+                with open(runtime_config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(runtime_config, f, default_flow_style=False, allow_unicode=True)
+                updated.append("runtime_yaml_synced")
         except Exception as e:
             try:
                 runtime_config = {}
@@ -3486,9 +3495,9 @@ if __name__ == "__main__":
         async def _dream_loop():
             await asyncio.sleep(30)
             local_bucket_mgr = BucketManager(config)
-            local_embedding_engine = EmbeddingEngine(config)
             while True:
                 local_dream_engine = DreamEngine(config)
+                local_embedding_engine = EmbeddingEngine(config)
                 try:
                     result = await local_dream_engine.run_due(
                         local_bucket_mgr,

@@ -2657,13 +2657,13 @@ async function loadConfig() {
     document.getElementById('cfg-dehy-key').placeholder = '当前: ' + (cfg.dehydration.api_key_masked || '未设置');
     document.getElementById('cfg-dehy-key').value = '';
     document.getElementById('cfg-dehy-maxtokens').value = cfg.dehydration.max_tokens || 1024;
-    document.getElementById('cfg-dehy-temp').value = cfg.dehydration.temperature || 0.1;
+    document.getElementById('cfg-dehy-temp').value = cfg.dehydration.temperature ?? 0.1;
     document.getElementById('cfg-emb-enabled').value = cfg.embedding.enabled ? 'true' : 'false';
     document.getElementById('cfg-emb-model').value = cfg.embedding.model || '';
     document.getElementById('cfg-emb-url').value = cfg.embedding.base_url || '';
     document.getElementById('cfg-emb-key').placeholder = '当前: ' + (cfg.embedding.api_key_masked || (cfg.embedding.has_own_api_key ? '***' : '复用脱水 API'));
     document.getElementById('cfg-emb-key').value = '';
-    document.getElementById('cfg-dream-enabled').value = cfg.dream.enabled ? 'true' : 'false';
+    document.getElementById('cfg-dream-enabled').value = cfg.dream.auto_enabled ? 'true' : 'false';
     document.getElementById('cfg-dream-surface').value = cfg.dream.surface_enabled ? 'true' : 'false';
     document.getElementById('cfg-dream-model').value = cfg.dream.model || '';
     document.getElementById('cfg-dream-url').value = cfg.dream.base_url || '';
@@ -2676,7 +2676,7 @@ async function loadConfig() {
     document.getElementById('cfg-dream-anchor').value = cfg.dream.identity_anchor_id || '';
     document.getElementById('cfg-gateway-cooldown').value = (cfg.gateway && cfg.gateway.cooldown_hours) ?? 6;
     document.getElementById('cfg-gateway-rounds').value = (cfg.gateway && cfg.gateway.skip_recent_rounds) ?? 5;
-    document.getElementById('cfg-merge').value = cfg.merge_threshold || 75;
+    document.getElementById('cfg-merge').value = cfg.merge_threshold ?? 75;
     document.getElementById('config-readonly').innerHTML =
       'Transport: <strong>' + cfg.transport + '</strong><br>' +
       'Buckets dir: <strong>' + cfg.buckets_dir + '</strong><br>' +
@@ -2703,7 +2703,7 @@ async function saveConfig(persist) {
       model: document.getElementById('cfg-dehy-model').value,
       base_url: document.getElementById('cfg-dehy-url').value,
       max_tokens: parseInt(document.getElementById('cfg-dehy-maxtokens').value) || 1024,
-      temperature: parseFloat(document.getElementById('cfg-dehy-temp').value) || 0.1,
+      temperature: floatValue('cfg-dehy-temp', 0.1),
     },
     embedding: {
       enabled: document.getElementById('cfg-emb-enabled').value === 'true',
@@ -2711,7 +2711,6 @@ async function saveConfig(persist) {
       base_url: document.getElementById('cfg-emb-url').value,
     },
     dream: {
-      enabled: document.getElementById('cfg-dream-enabled').value === 'true',
       auto_enabled: document.getElementById('cfg-dream-enabled').value === 'true',
       surface_enabled: document.getElementById('cfg-dream-surface').value === 'true',
       model: document.getElementById('cfg-dream-model').value,
@@ -2726,7 +2725,7 @@ async function saveConfig(persist) {
       cooldown_hours: floatValue('cfg-gateway-cooldown', 6),
       skip_recent_rounds: numberValue('cfg-gateway-rounds', 5),
     },
-    merge_threshold: parseInt(document.getElementById('cfg-merge').value) || 75,
+    merge_threshold: numberValue('cfg-merge', 75),
     persist: persist,
   };
   var keyVal = document.getElementById('cfg-dehy-key').value;

@@ -1,7 +1,9 @@
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 
 class DummyEmbeddingEngine:
@@ -734,6 +736,113 @@ async def test_dashboard_auth_setup_uses_state_dir(monkeypatch, test_config):
 
     assert response.status_code == 200
     assert os.path.exists(auth_file)
+
+
+@pytest.mark.asyncio
+async def test_config_get_reports_effective_dream_engine_values(monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "_require_dashboard_auth", lambda request: None)
+    monkeypatch.setattr(
+        server,
+        "config",
+        {
+            **server.config,
+            "dream": {
+                "enabled": False,
+                "auto_enabled": True,
+                "surface_enabled": False,
+                "model": "config-model",
+                "base_url": "https://config.example",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        server,
+        "dream_engine",
+        SimpleNamespace(
+            enabled=True,
+            auto_enabled=False,
+            surface_enabled=True,
+            model="env-model",
+            base_url="https://env.example",
+            api_key="env-secret",
+        ),
+    )
+
+    response = await server.api_config_get(DummyRequest())
+    payload = json.loads(response.body)
+
+    assert payload["dream"]["enabled"] is True
+    assert payload["dream"]["auto_enabled"] is False
+    assert payload["dream"]["surface_enabled"] is True
+    assert payload["dream"]["model"] == "env-model"
+    assert payload["dream"]["base_url"] == "https://env.example"
+    assert payload["dream"]["api_key_masked"] == "env-...cret"
+
+
+@pytest.mark.asyncio
+async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_config, tmp_path):
+    import server
+
+    config_path = tmp_path / "config.yaml"
+    runtime_path = tmp_path / "state" / "config.runtime.yaml"
+    runtime_path.parent.mkdir(exist_ok=True)
+    config_path.write_text(
+        "dream:\n  model: yaml-old\n"
+        "gateway:\n  cooldown_hours: 48\n  skip_recent_rounds: 9\n",
+        encoding="utf-8",
+    )
+    runtime_path.write_text(
+        "dream:\n  model: runtime-old\n"
+        "gateway:\n  cooldown_hours: 48\n  skip_recent_rounds: 9\n",
+        encoding="utf-8",
+    )
+    cfg = {
+        **test_config,
+        "_runtime_config_path": str(runtime_path),
+        "dream": {
+            "enabled": True,
+            "auto_enabled": True,
+            "surface_enabled": True,
+            "model": "runtime-old",
+            "base_url": "https://api.deepseek.com",
+        },
+        "gateway": {
+            **test_config["gateway"],
+            "cooldown_hours": 48,
+            "skip_recent_rounds": 9,
+        },
+    }
+
+    async def fake_hot_update(_body):
+        return "gateway_hot_reloaded"
+
+    monkeypatch.setenv("OMBRE_CONFIG_PATH", str(config_path))
+    monkeypatch.delenv("OMBRE_DREAM_MODEL", raising=False)
+    monkeypatch.setattr(server, "config", cfg)
+    monkeypatch.setattr(server, "_require_dashboard_auth", lambda request: None)
+    monkeypatch.setattr(server, "_hot_update_gateway_config", fake_hot_update)
+
+    response = await server.api_config_update(
+        DummyRequest(
+            {
+                "dream": {"auto_enabled": False, "model": "dream-new"},
+                "gateway": {"cooldown_hours": 6, "skip_recent_rounds": 5},
+                "persist": True,
+            }
+        )
+    )
+    payload = json.loads(response.body)
+    runtime_config = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert "runtime_yaml_synced" in payload["updated"]
+    assert runtime_config["dream"]["model"] == "dream-new"
+    assert runtime_config["dream"]["auto_enabled"] is False
+    assert runtime_config["gateway"]["cooldown_hours"] == 6
+    assert runtime_config["gateway"]["skip_recent_rounds"] == 5
 
 
 def test_chatgpt_oauth_provider_issues_single_use_codes():

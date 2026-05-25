@@ -141,6 +141,35 @@ async def test_dream_materials_use_newer_created_or_updated_at_but_not_last_acti
 
 
 @pytest.mark.asyncio
+async def test_dream_payload_exposes_recent_residue_time_when_bucket_was_updated(test_config):
+    cfg = _dream_config(test_config)
+    engine = DreamEngine(cfg)
+    now = datetime(2026, 5, 25, 3, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    created = (now - timedelta(days=10)).isoformat(timespec="seconds")
+    updated = (now - timedelta(hours=1)).isoformat(timespec="seconds")
+
+    payload = engine._payload_for(
+        [
+            {
+                "id": "old-created-recent-updated",
+                "content": "旧记忆刚刚被真正改写，仍可作为白天残留。",
+                "metadata": {
+                    "created": created,
+                    "updated_at": updated,
+                    "type": "dynamic",
+                },
+            }
+        ],
+        None,
+    )
+
+    residue = payload["daytime_residue"][0]
+    assert residue["created"] == created
+    assert residue["updated_at"] == updated
+    assert residue["residue_time"] == updated
+
+
+@pytest.mark.asyncio
 async def test_run_due_skips_outside_east_eight_dream_window(test_config):
     cfg = _dream_config(test_config)
     mgr = BucketManager(cfg)

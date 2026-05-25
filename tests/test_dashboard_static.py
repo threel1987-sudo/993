@@ -36,3 +36,32 @@ def test_dashboard_exposes_gateway_memory_cooldown_settings():
     assert "cfg.gateway.skip_recent_rounds" in html
     assert "cooldown_hours: floatValue('cfg-gateway-cooldown', 6)" in html
     assert "skip_recent_rounds: numberValue('cfg-gateway-rounds', 5)" in html
+
+
+def test_dashboard_dream_background_control_uses_auto_enabled_only():
+    html = Path("dashboard.html").read_text(encoding="utf-8")
+    load_block = html.split("async function loadConfig()", 1)[1].split("async function saveConfig", 1)[0]
+    save_block = html.split("async function saveConfig", 1)[1].split("var keyVal =", 1)[0]
+    dream_block = save_block.split("dream: {", 1)[1].split("gateway: {", 1)[0]
+    dream_lines = [line.strip() for line in dream_block.splitlines()]
+
+    assert "document.getElementById('cfg-dream-enabled').value = cfg.dream.auto_enabled ? 'true' : 'false';" in load_block
+    assert "document.getElementById('cfg-dream-enabled').value = cfg.dream.enabled" not in load_block
+    assert "auto_enabled: document.getElementById('cfg-dream-enabled').value === 'true'," in dream_lines
+    assert "enabled: document.getElementById('cfg-dream-enabled').value === 'true'," not in dream_lines
+    assert "surface_enabled: document.getElementById('cfg-dream-surface').value === 'true'," in dream_lines
+
+
+def test_dashboard_config_number_zero_values_are_preserved():
+    html = Path("dashboard.html").read_text(encoding="utf-8")
+    load_block = html.split("async function loadConfig()", 1)[1].split("async function saveConfig", 1)[0]
+    save_block = html.split("async function saveConfig", 1)[1].split("var keyVal =", 1)[0]
+
+    assert "document.getElementById('cfg-dehy-temp').value = cfg.dehydration.temperature ?? 0.1;" in load_block
+    assert "document.getElementById('cfg-merge').value = cfg.merge_threshold ?? 75;" in load_block
+    assert "temperature: floatValue('cfg-dehy-temp', 0.1)," in save_block
+    assert "merge_threshold: numberValue('cfg-merge', 75)," in save_block
+    assert "cfg.dehydration.temperature || 0.1" not in load_block
+    assert "cfg.merge_threshold || 75" not in load_block
+    assert "parseFloat(document.getElementById('cfg-dehy-temp').value) || 0.1" not in save_block
+    assert "parseInt(document.getElementById('cfg-merge').value) || 75" not in save_block

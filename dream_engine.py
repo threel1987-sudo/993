@@ -302,10 +302,13 @@ class DreamEngine:
             meta = bucket.get("metadata", {}) or {}
             tags = {str(tag).lower() for tag in meta.get("tags", []) or []}
             kind = "whisper" if meta.get("type") == "feel" and "whisper" in tags else "memory"
+            residue_time = self._bucket_created_local(bucket)
             return {
                 "source_id": bucket.get("id") or meta.get("id"),
                 "kind": kind,
+                "residue_time": residue_time.isoformat() if residue_time else meta.get("created", ""),
                 "created": meta.get("created", ""),
+                "updated_at": meta.get("updated_at", ""),
                 "valence": meta.get("valence", 0.5),
                 "arousal": meta.get("arousal", 0.3),
                 "text": strip_wikilinks(bucket_text_for_embedding(bucket))[:700],
