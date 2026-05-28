@@ -3050,6 +3050,7 @@ async def api_config_get(request):
     emb = config.get("embedding", {})
     gateway_cfg = config.get("gateway", {}) if isinstance(config.get("gateway", {}), dict) else {}
     dream_cfg = config.get("dream", {}) if isinstance(config.get("dream", {}), dict) else {}
+    reflection_cfg = config.get("reflection", {}) if isinstance(config.get("reflection", {}), dict) else {}
     return JSONResponse({
         "dehydration": {
             "model": dehy.get("model", ""),
@@ -3086,6 +3087,20 @@ async def api_config_get(request):
             "min_material_count": dream_cfg.get("min_material_count", 5),
             "material_window_hours": dream_cfg.get("material_window_hours", 48),
             "identity_anchor_id": dream_cfg.get("identity_anchor_id", ""),
+        },
+        "reflection": {
+            "memory_affect_anchor_enabled": bool(
+                reflection_cfg.get(
+                    "memory_affect_anchor_enabled",
+                    getattr(reflection_engine, "memory_affect_anchor_enabled", True),
+                )
+            ),
+            "relationship_weather_affect_anchor_enabled": bool(
+                reflection_cfg.get(
+                    "relationship_weather_affect_anchor_enabled",
+                    getattr(reflection_engine, "relationship_weather_affect_anchor_enabled", True),
+                )
+            ),
         },
         "merge_threshold": config.get("merge_threshold", 75),
         "transport": config.get("transport", "stdio"),
@@ -3190,6 +3205,16 @@ async def api_config_update(request):
         if hot_update_status:
             updated.append(hot_update_status)
 
+    # --- Reflection config ---
+    if "reflection" in body:
+        r = body["reflection"]
+        reflection_cfg = config.setdefault("reflection", {})
+        for key in ("memory_affect_anchor_enabled", "relationship_weather_affect_anchor_enabled"):
+            if key in r:
+                reflection_cfg[key] = bool(r[key])
+                setattr(reflection_engine, key, reflection_cfg[key])
+                updated.append(f"reflection.{key}")
+
     # --- Dream config ---
     if "dream" in body:
         d = body["dream"]
@@ -3252,6 +3277,12 @@ async def api_config_update(request):
                     sc_gateway["cooldown_hours"] = max(0.0, float(body["gateway"]["cooldown_hours"]))
                 if "skip_recent_rounds" in body["gateway"]:
                     sc_gateway["skip_recent_rounds"] = max(0, int(body["gateway"]["skip_recent_rounds"]))
+
+            if "reflection" in body:
+                sc_reflection = save_config.setdefault("reflection", {})
+                for key in ("memory_affect_anchor_enabled", "relationship_weather_affect_anchor_enabled"):
+                    if key in body["reflection"]:
+                        sc_reflection[key] = bool(body["reflection"][key])
 
             if "dream" in body:
                 sc_dream = save_config.setdefault("dream", {})
@@ -3560,6 +3591,13 @@ if __name__ == "__main__":
             local_memory_edge_store = MemoryEdgeStore(config)
             while True:
                 try:
+                    reflection_cfg = config.get("reflection", {}) if isinstance(config.get("reflection", {}), dict) else {}
+                    local_reflection_engine.memory_affect_anchor_enabled = bool(
+                        reflection_cfg.get("memory_affect_anchor_enabled", True)
+                    )
+                    local_reflection_engine.relationship_weather_affect_anchor_enabled = bool(
+                        reflection_cfg.get("relationship_weather_affect_anchor_enabled", True)
+                    )
                     results = await local_reflection_engine.run_due(
                         local_bucket_mgr,
                         local_persona_engine,
@@ -3567,7 +3605,6 @@ if __name__ == "__main__":
                     )
                     if results:
                         logger.info("Reflection run-due results / 反思定时结果: %s", results)
-                    reflection_cfg = config.get("reflection", {}) if isinstance(config.get("reflection", {}), dict) else {}
                     if reflection_cfg.get("enrich_backfill_enabled", True):
                         backfill_result = await _backfill_memory_enrichment(
                             limit=reflection_cfg.get("enrich_backfill_limit", 5),

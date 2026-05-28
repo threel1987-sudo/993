@@ -274,6 +274,25 @@ class TestSearchScoring:
         old = {"last_active": (datetime.now() - timedelta(days=30)).isoformat()}
         assert bucket_mgr._calc_time_score(recent) > bucket_mgr._calc_time_score(old)
 
+    def test_topic_score_ignores_comments_and_affect_anchor(self, bucket_mgr):
+        bucket = {
+            "content": (
+                "这里只是普通正文。\n\n"
+                "### affect_anchor\n\n"
+                "> UNIQUE_YEAR_RING_TOKEN\n"
+                "> Cmaj7 -> G/B\n\n"
+                "含义：只是温度。"
+            ),
+            "metadata": {
+                "name": "普通标题",
+                "domain": [],
+                "tags": [],
+                "comments": [{"content": "UNIQUE_YEAR_RING_TOKEN"}],
+            },
+        }
+
+        assert bucket_mgr._calc_topic_score("UNIQUE_YEAR_RING_TOKEN", bucket) == 0
+
     @pytest.mark.asyncio
     async def test_resolved_bucket_penalized_in_normalized(self, populated_env):
         """Resolved buckets get ×0.3 in normalized score (breath-debug logic)."""

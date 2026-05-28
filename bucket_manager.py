@@ -40,7 +40,7 @@ import frontmatter
 import jieba
 from rapidfuzz import fuzz
 
-from utils import generate_bucket_id, sanitize_name, safe_path, now_iso
+from utils import generate_bucket_id, sanitize_name, safe_path, now_iso, strip_affect_anchor, strip_wikilinks
 
 logger = logging.getLogger("ombre_brain.bucket")
 
@@ -768,12 +768,7 @@ class BucketManager:
             )
             * 2
         )
-        comment_text = " ".join(
-            str(comment.get("content", ""))
-            for comment in meta.get("comments", [])
-            if isinstance(comment, dict)
-        )
-        searchable_content = f"{bucket.get('content', '')}\n{comment_text}"[:1000]
+        searchable_content = strip_affect_anchor(strip_wikilinks(str(bucket.get("content", ""))))[:1000]
         content_score = fuzz.partial_ratio(query, searchable_content) * self.content_weight
 
         return (name_score + domain_score + tag_score + content_score) / (100 * (3 + 2.5 + 2 + self.content_weight))

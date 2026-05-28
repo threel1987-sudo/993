@@ -138,7 +138,7 @@ async def test_apply_feel_comment_backfill_can_refresh_source_embedding(test_con
     assert embedding_engine.calls[0][0] == source_id
     assert "Title: 源记忆" in embedding_engine.calls[0][1]
     assert "源记忆正文" in embedding_engine.calls[0][1]
-    assert "多了一圈年轮" in embedding_engine.calls[0][1]
+    assert "多了一圈年轮" not in embedding_engine.calls[0][1]
 
 
 @pytest.mark.asyncio

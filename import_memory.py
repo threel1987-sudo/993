@@ -20,11 +20,15 @@ import json
 import hashlib
 import logging
 import asyncio
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from utils import bucket_text_for_embedding, count_tokens_approx, now_iso
+import jieba
+from rapidfuzz import fuzz
+
+from utils import bucket_text_for_embedding, count_tokens_approx, now_iso, strip_affect_anchor
 
 logger = logging.getLogger("ombre_brain.import")
 
@@ -33,6 +37,52 @@ logger = logging.getLogger("ombre_brain.import")
 # Format Parsers — normalize any format to conversation turns
 # 格式解析器 — 将任意格式标准化为对话轮次
 # ============================================================
+
+_MARKDOWN_ROLE_RE = re.compile(
+    r"^\s*(?:>\s*)?(?:[-*+]\s*)?(?:#{1,6}\s*)?(?:\*\*)?([A-Za-z0-9_\-\u4e00-\u9fff]+)(?:\*\*)?\s*[:：]\s*(.*)$"
+)
+_MARKDOWN_USER_LABELS = {
+    "human",
+    "user",
+    "me",
+    "rain",
+    "你",
+    "我",
+    "用户",
+    "人类",
+    "小雨",
+}
+_MARKDOWN_ASSISTANT_LABELS = {
+    "assistant",
+    "claude",
+    "ai",
+    "gpt",
+    "chatgpt",
+    "bot",
+    "deepseek",
+    "gemini",
+    "qwen",
+    "haven",
+    "助手",
+    "模型",
+    "ai助手",
+}
+
+
+def _detect_markdown_role_line(line: str) -> tuple[str, str] | None:
+    """Return (role, content_after_prefix) for simple role-prefixed Markdown lines."""
+    match = _MARKDOWN_ROLE_RE.match(line)
+    if not match:
+        return None
+    label = match.group(1).strip().lower()
+    content_after = match.group(2).strip()
+    if content_after.startswith("**"):
+        content_after = content_after[2:].lstrip()
+    if label in _MARKDOWN_USER_LABELS:
+        return "user", content_after
+    if label in _MARKDOWN_ASSISTANT_LABELS:
+        return "assistant", content_after
+    return None
 
 def _parse_claude_json(data: dict | list) -> list[dict]:
     """Parse Claude.ai export JSON → [{role, content, timestamp}, ...]"""
@@ -140,28 +190,24 @@ def _parse_markdown(text: str) -> list[dict]:
     current_role = "user"
     current_content = []
 
+    def append_current_turn():
+        content = "\n".join(current_content).strip()
+        if content:
+            turns.append({"role": current_role, "content": content, "timestamp": ""})
+
     for line in lines:
         stripped = line.strip()
-        # Detect role switches
-        if stripped.lower().startswith(("human:", "user:", "你:", "我:")):
+        role_line = _detect_markdown_role_line(stripped)
+        if role_line:
             if current_content:
-                turns.append({"role": current_role, "content": "\n".join(current_content).strip(), "timestamp": ""})
-            current_role = "user"
-            content_after = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
-            current_content = [content_after] if content_after else []
-        elif stripped.lower().startswith(("assistant:", "claude:", "ai:", "gpt:", "bot:", "deepseek:")):
-            if current_content:
-                turns.append({"role": current_role, "content": "\n".join(current_content).strip(), "timestamp": ""})
-            current_role = "assistant"
-            content_after = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
+                append_current_turn()
+            current_role, content_after = role_line
             current_content = [content_after] if content_after else []
         else:
             current_content.append(line)
 
     if current_content:
-        content = "\n".join(current_content).strip()
-        if content:
-            turns.append({"role": current_role, "content": content, "timestamp": ""})
+        append_current_turn()
 
     # If no role patterns detected, treat entire text as one big chunk
     if not turns:
@@ -214,6 +260,101 @@ def detect_and_parse(raw_content: str, filename: str = "") -> list[dict]:
 # 分窗 — 按对话轮次边界切为 ~10k token 窗口
 # ============================================================
 
+_OVERLAP_CONTEXT_NOTICE = "[上下文提示] 以下是上一段结尾，只用于理解前后关系，请不要从这里单独提取记忆。"
+_CURRENT_SEGMENT_NOTICE = "[本段内容]"
+_IMPORT_DUPLICATE_SIMILARITY = 88.0
+
+
+def _normalize_import_text(text: str) -> str:
+    text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", str(text or ""))
+    text = strip_affect_anchor(text)
+    text = re.sub(r"[\s\u3000]+", "", text.lower())
+    return re.sub(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", "", text)
+
+
+def _import_similarity_text(text: str) -> str:
+    text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", str(text or "").lower())
+    text = strip_affect_anchor(text)
+    text = re.sub(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", " ", text)
+    return " ".join(token for token in jieba.lcut(text) if token.strip())
+
+
+def _import_content_hash(text: str) -> str:
+    normalized = _normalize_import_text(text)
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def _tail_for_overlap(text: str, overlap_tokens: int) -> str:
+    lines = text.splitlines() or [text]
+    tail: list[str] = []
+    current_tokens = 0
+    max_chars = max(40, int(overlap_tokens / 1.8))
+
+    for line in reversed(lines):
+        line_tokens = count_tokens_approx(line)
+        if not tail and line_tokens > overlap_tokens:
+            return line[-max_chars:].strip()
+        if tail and current_tokens + line_tokens > overlap_tokens:
+            break
+        tail.insert(0, line)
+        current_tokens += line_tokens
+
+    return "\n".join(tail).strip()
+
+
+def _split_oversized_turn(role_label: str, content: str, target_tokens: int) -> list[str]:
+    """Split a single very long turn into model-sized chunks with small context overlap."""
+    prefix = f"[{role_label}] "
+    segments: list[str] = []
+    current_lines: list[str] = []
+    current_tokens = count_tokens_approx(prefix)
+    content_budget = max(80, int(target_tokens * 0.85))
+    overlap_tokens = max(20, int(target_tokens * 0.12))
+    max_chars = max(80, int(content_budget / 1.8))
+
+    def flush_current():
+        nonlocal current_lines, current_tokens
+        body = "\n".join(current_lines).strip()
+        if body:
+            segments.append(body)
+        current_lines = []
+        current_tokens = count_tokens_approx(prefix)
+
+    for line in content.splitlines() or [content]:
+        line_tokens = count_tokens_approx(line)
+        if line_tokens > content_budget:
+            flush_current()
+            for start in range(0, len(line), max_chars):
+                segment = line[start:start + max_chars].strip()
+                if segment:
+                    segments.append(segment)
+            continue
+
+        if current_lines and current_tokens + line_tokens > content_budget:
+            flush_current()
+        current_lines.append(line)
+        current_tokens += line_tokens
+
+    flush_current()
+
+    pieces: list[str] = []
+    previous_tail = ""
+    for segment in segments:
+        body = prefix + segment
+        if previous_tail:
+            pieces.append(
+                f"{_OVERLAP_CONTEXT_NOTICE}\n"
+                f"{prefix}{previous_tail}\n\n"
+                f"{_CURRENT_SEGMENT_NOTICE}\n"
+                f"{body}"
+            )
+        else:
+            pieces.append(body)
+        previous_tail = _tail_for_overlap(segment, overlap_tokens)
+
+    return pieces
+
+
 def chunk_turns(turns: list[dict], target_tokens: int = 10000) -> list[dict]:
     """
     Group conversation turns into chunks of ~target_tokens.
@@ -247,13 +388,13 @@ def chunk_turns(turns: list[dict], target_tokens: int = 10000) -> list[dict]:
                 turn_count = 0
                 first_ts = ""
 
-            # Add oversized turn as its own chunk
-            chunks.append({
-                "content": line,
-                "timestamp_start": turn.get("timestamp", ""),
-                "timestamp_end": turn.get("timestamp", ""),
-                "turn_count": 1,
-            })
+            for split_line in _split_oversized_turn(role_label, turn["content"], target_tokens):
+                chunks.append({
+                    "content": split_line,
+                    "timestamp_start": turn.get("timestamp", ""),
+                    "timestamp_end": turn.get("timestamp", ""),
+                    "turn_count": 1,
+                })
             continue
 
         if current_tokens + line_tokens > target_tokens and current_lines:
@@ -371,8 +512,9 @@ IMPORT_EXTRACT_PROMPT = """你是一个对话记忆提取专家。从以下对�
 4. 如果对话中有特殊暗号、仪式性行为、关键承诺等，标记 preserve_raw=true
 5. 如果内容是用户和AI之间的习惯性互动模式（例如打招呼方式、告别习惯），标记 is_pattern=true
 6. 每条记忆不少于30字
-7. 总条目数控制在 0~5 个（没有值得记的就返回空数组）
+7. 总条目数控制在 0~10 个（没有值得记的就返回空数组）
 8. 在 content 中对人名、地名、专有名词用 [[双链]] 标记
+9. 如果片段里出现「[上下文提示]」，该部分只是上一段尾巴，只用于理解前后关系；不要从上下文提示本身单独提取记忆，除非同一事实在「[本段内容]」里继续出现
 
 输出格式（纯 JSON 数组，无其他内容）：
 [
@@ -426,6 +568,7 @@ class ImportEngine:
         self._paused = False
         self._running = False
         self._chunks: list[dict] = []
+        self._seen_import_hashes: set[str] = set()
 
     @property
     def is_running(self) -> bool:
@@ -455,6 +598,7 @@ class ImportEngine:
 
         self._running = True
         self._paused = False
+        self._seen_import_hashes = set()
 
         try:
             source_hash = hashlib.sha256(raw_content.encode()).hexdigest()[:16]
@@ -545,45 +689,23 @@ class ImportEngine:
         if not items:
             return
 
+        items = self._dedupe_extracted_items(items)
+        if not items:
+            return
+
         # --- Store each extracted memory ---
         for item in items:
             try:
                 should_preserve = preserve_raw or item.get("preserve_raw", False)
+                status = await self._merge_or_create_item(item, preserve_raw=should_preserve)
 
-                if should_preserve:
-                    # Raw mode: store original content without summarization
-                    bucket_id = await self.bucket_mgr.create(
-                        content=item["content"],
-                        tags=item.get("tags", []),
-                        importance=item.get("importance", 5),
-                        domain=item.get("domain", ["未分类"]),
-                        valence=item.get("valence", 0.5),
-                        arousal=item.get("arousal", 0.3),
-                        name=item.get("name"),
-                    )
-                    if self.embedding_engine:
-                        try:
-                            await self.embedding_engine.generate_and_store(
-                                bucket_id,
-                                bucket_text_for_embedding(
-                                    {
-                                        "id": bucket_id,
-                                        "content": item["content"],
-                                        "metadata": {"name": item.get("name")},
-                                    }
-                                ),
-                            )
-                        except Exception:
-                            pass
+                if status == "raw":
                     self.state.data["memories_raw"] += 1
                     self.state.data["memories_created"] += 1
+                elif status == "created":
+                    self.state.data["memories_created"] += 1
                 else:
-                    # Normal mode: go through merge-or-create pipeline
-                    is_merged = await self._merge_or_create_item(item)
-                    if is_merged:
-                        self.state.data["memories_merged"] += 1
-                    else:
-                        self.state.data["memories_created"] += 1
+                    self.state.data["memories_merged"] += 1
 
                 # Patch timestamp if available
                 if chunk.get("timestamp_start"):
@@ -604,7 +726,7 @@ class ImportEngine:
                 {"role": "system", "content": IMPORT_EXTRACT_PROMPT},
                 {"role": "user", "content": chunk_content[:12000]},
             ],
-            max_tokens=2048,
+            max_tokens=4096,
             temperature=0.0,
         )
 
@@ -660,8 +782,55 @@ class ImportEngine:
 
         return validated
 
-    async def _merge_or_create_item(self, item: dict) -> bool:
-        """Try to merge with existing bucket, or create new. Returns is_merged."""
+    def _dedupe_extracted_items(self, items: list[dict]) -> list[dict]:
+        deduped = []
+        for item in items:
+            content = str(item.get("content") or "")
+            if not _normalize_import_text(content):
+                continue
+            content_hash = _import_content_hash(content)
+            if content_hash in self._seen_import_hashes:
+                logger.info("Skipped duplicate import item in same run: %s", item.get("name", "?"))
+                continue
+            self._seen_import_hashes.add(content_hash)
+            deduped.append(item)
+        return deduped
+
+    async def _find_duplicate_bucket(self, content: str) -> dict | None:
+        normalized = _normalize_import_text(content)
+        if not normalized:
+            return None
+        similarity_text = _import_similarity_text(content)
+        try:
+            buckets = await self.bucket_mgr.list_all(include_archive=False)
+        except Exception as e:
+            logger.warning(f"Import duplicate scan failed: {e}")
+            return None
+
+        for bucket in buckets:
+            meta = bucket.get("metadata", {}) if isinstance(bucket, dict) else {}
+            if meta.get("type") == "feel":
+                continue
+            existing_content = str(bucket.get("content") or "")
+            existing_normalized = _normalize_import_text(existing_content)
+            if not existing_normalized:
+                continue
+            if normalized == existing_normalized:
+                return bucket
+            if min(len(normalized), len(existing_normalized)) >= 40 and (
+                normalized in existing_normalized or existing_normalized in normalized
+            ):
+                return bucket
+
+            existing_similarity_text = _import_similarity_text(existing_content)
+            if min(len(similarity_text), len(existing_similarity_text)) < 30:
+                continue
+            if fuzz.token_set_ratio(similarity_text, existing_similarity_text) >= _IMPORT_DUPLICATE_SIMILARITY:
+                return bucket
+        return None
+
+    async def _merge_or_create_item(self, item: dict, preserve_raw: bool = False) -> str:
+        """Try to merge with existing bucket, or create new. Returns created/merged/raw/duplicate."""
         content = item["content"]
         domain = item.get("domain", ["未分类"])
         tags = item.get("tags", [])
@@ -669,6 +838,41 @@ class ImportEngine:
         valence = item.get("valence", 0.5)
         arousal = item.get("arousal", 0.3)
         name = item.get("name", "")
+
+        duplicate = await self._find_duplicate_bucket(content)
+        if duplicate:
+            logger.info(
+                "Skipped duplicate import item: %s -> %s",
+                name or "?",
+                duplicate.get("id", "?"),
+            )
+            return "duplicate"
+
+        if preserve_raw:
+            bucket_id = await self.bucket_mgr.create(
+                content=content,
+                tags=tags,
+                importance=importance,
+                domain=domain,
+                valence=valence,
+                arousal=arousal,
+                name=name or None,
+            )
+            if self.embedding_engine:
+                try:
+                    await self.embedding_engine.generate_and_store(
+                        bucket_id,
+                        bucket_text_for_embedding(
+                            {
+                                "id": bucket_id,
+                                "content": content,
+                                "metadata": {"name": name},
+                            }
+                        ),
+                    )
+                except Exception:
+                    pass
+            return "raw"
 
         try:
             existing = await self.bucket_mgr.search(
@@ -711,7 +915,7 @@ class ImportEngine:
                             )
                         except Exception:
                             pass
-                    return True
+                    return "merged"
                 except Exception as e:
                     logger.warning(f"Merge failed during import: {e}")
                     self.state.data["api_calls"] += 1
@@ -740,7 +944,7 @@ class ImportEngine:
                 )
             except Exception:
                 pass
-        return False
+        return "created"
 
     async def detect_patterns(self) -> list[dict]:
         """

@@ -38,6 +38,20 @@ def test_dashboard_exposes_gateway_memory_cooldown_settings():
     assert "skip_recent_rounds: numberValue('cfg-gateway-rounds', 5)" in html
 
 
+def test_dashboard_exposes_reflection_affect_anchor_switches():
+    html = Path("dashboard.html").read_text(encoding="utf-8")
+    load_block = html.split("async function loadConfig()", 1)[1].split("async function saveConfig", 1)[0]
+    save_block = html.split("async function saveConfig", 1)[1].split("var keyVal =", 1)[0]
+
+    assert "<h3>记忆关系整理</h3>" in html
+    assert 'id="cfg-reflection-memory-anchor"' in html
+    assert 'id="cfg-reflection-weather-anchor"' in html
+    assert "cfg.reflection.memory_affect_anchor_enabled" in load_block
+    assert "cfg.reflection.relationship_weather_affect_anchor_enabled" in load_block
+    assert "memory_affect_anchor_enabled: document.getElementById('cfg-reflection-memory-anchor').value === 'true'," in save_block
+    assert "relationship_weather_affect_anchor_enabled: document.getElementById('cfg-reflection-weather-anchor').value === 'true'," in save_block
+
+
 def test_dashboard_dream_background_control_uses_auto_enabled_only():
     html = Path("dashboard.html").read_text(encoding="utf-8")
     load_block = html.split("async function loadConfig()", 1)[1].split("async function saveConfig", 1)[0]
@@ -65,3 +79,12 @@ def test_dashboard_config_number_zero_values_are_preserved():
     assert "cfg.merge_threshold || 75" not in load_block
     assert "parseFloat(document.getElementById('cfg-dehy-temp').value) || 0.1" not in save_block
     assert "parseInt(document.getElementById('cfg-merge').value) || 75" not in save_block
+
+
+def test_dashboard_import_file_input_resets_after_selection():
+    html = Path("dashboard.html").read_text(encoding="utf-8")
+    import_block = html.split("// --- Import functions ---", 1)[1].split("async function pollImportStatus", 1)[0]
+
+    assert "const selectedFile = fileInput.files[0];" in import_block
+    assert "fileInput.value = '';" in import_block
+    assert "startImport(selectedFile);" in import_block

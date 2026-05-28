@@ -160,6 +160,8 @@ def load_config(config_path: str = None) -> dict:
             "enabled": True,
             "auto_enabled": True,
             "enrich_on_write": True,
+            "memory_affect_anchor_enabled": True,
+            "relationship_weather_affect_anchor_enabled": True,
             "enrich_backfill_enabled": True,
             "enrich_backfill_limit": 5,
             "base_url": "",
@@ -464,6 +466,16 @@ def strip_wikilinks(text: str) -> str:
     return re.sub(r"\[\[([^\]]+)\]\]", r"\1", text) if text else text
 
 
+_AFFECT_ANCHOR_RE = re.compile(r"(?ims)^###\s*affect_anchor\s*$.*?(?=^###\s+|\Z)")
+
+
+def strip_affect_anchor(text: str) -> str:
+    """Remove the display-only affect anchor block from searchable text."""
+    if not text:
+        return text
+    return _AFFECT_ANCHOR_RE.sub("", str(text)).strip()
+
+
 def bucket_text_for_embedding(bucket: dict) -> str:
     """
     Build the text sent to the embedding model for a bucket.
@@ -477,15 +489,7 @@ def bucket_text_for_embedding(bucket: dict) -> str:
         meta = {}
 
     title = strip_wikilinks(str(meta.get("name") or "")).strip()
-    body = strip_wikilinks(str(bucket.get("content") or "")).strip()
-    comments = meta.get("comments", [])
-    comment_text = ""
-    if isinstance(comments, list):
-        comment_text = "\n".join(
-            strip_wikilinks(str(comment.get("content", ""))).strip()
-            for comment in comments
-            if isinstance(comment, dict) and str(comment.get("content", "")).strip()
-        )
+    body = strip_affect_anchor(strip_wikilinks(str(bucket.get("content") or ""))).strip()
 
     parts = []
     if title:
@@ -494,9 +498,6 @@ def bucket_text_for_embedding(bucket: dict) -> str:
             parts.append(f"Content: {body}")
     elif body:
         parts.append(body)
-
-    if comment_text:
-        parts.append(f"Comments:\n{comment_text}" if title else comment_text)
 
     return "\n".join(parts).strip()
 

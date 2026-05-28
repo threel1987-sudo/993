@@ -467,7 +467,8 @@ async def test_comment_bucket_adds_ring_and_touches_source(monkeypatch, bucket_m
     assert bucket["metadata"]["activation_count"] == 1
     assert bucket["metadata"]["last_active"] != "2026-05-04T08:00:00+00:00"
     assert embedding_call[0] == bucket_id
-    assert "现在再看到它" in embedding_call[1]
+    assert "小雨把旧记忆拿出来看" in embedding_call[1]
+    assert "现在再看到它" not in embedding_call[1]
 
 
 @pytest.mark.asyncio
@@ -606,7 +607,7 @@ async def test_dashboard_content_api_edits_body_preserves_comments(monkeypatch, 
     assert bucket["metadata"]["comments"][0]["id"] == comment["id"]
     assert bucket["metadata"]["last_active"] == before["metadata"]["last_active"]
     assert "新正文" in embedding_call[1]
-    assert "正文下面的小雨年轮" in embedding_call[1]
+    assert "正文下面的小雨年轮" not in embedding_call[1]
 
 
 @pytest.mark.asyncio
@@ -738,7 +739,8 @@ async def test_hold_feel_with_source_writes_comment_not_digested(monkeypatch, bu
     assert bucket["metadata"]["model_valence"] == 0.76
     assert not bucket["metadata"].get("digested")
     assert embedding_call[0] == source_id
-    assert "被认出来的安静" in embedding_call[1]
+    assert "小雨说这段记忆以后还要回来看" in embedding_call[1]
+    assert "被认出来的安静" not in embedding_call[1]
 
 
 @pytest.mark.asyncio
@@ -1009,6 +1011,30 @@ async def test_config_get_reports_effective_dream_engine_values(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_config_get_reports_reflection_affect_anchor_switches(monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "_require_dashboard_auth", lambda request: None)
+    monkeypatch.setattr(
+        server,
+        "config",
+        {
+            **server.config,
+            "reflection": {
+                "memory_affect_anchor_enabled": False,
+                "relationship_weather_affect_anchor_enabled": True,
+            },
+        },
+    )
+
+    response = await server.api_config_get(DummyRequest())
+    payload = json.loads(response.body)
+
+    assert payload["reflection"]["memory_affect_anchor_enabled"] is False
+    assert payload["reflection"]["relationship_weather_affect_anchor_enabled"] is True
+
+
+@pytest.mark.asyncio
 async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_config, tmp_path):
     import server
 
@@ -1017,12 +1043,14 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
     runtime_path.parent.mkdir(exist_ok=True)
     config_path.write_text(
         "dream:\n  model: yaml-old\n"
-        "gateway:\n  cooldown_hours: 48\n  skip_recent_rounds: 9\n",
+        "gateway:\n  cooldown_hours: 48\n  skip_recent_rounds: 9\n"
+        "reflection:\n  memory_affect_anchor_enabled: true\n",
         encoding="utf-8",
     )
     runtime_path.write_text(
         "dream:\n  model: runtime-old\n"
-        "gateway:\n  cooldown_hours: 48\n  skip_recent_rounds: 9\n",
+        "gateway:\n  cooldown_hours: 48\n  skip_recent_rounds: 9\n"
+        "reflection:\n  memory_affect_anchor_enabled: true\n",
         encoding="utf-8",
     )
     cfg = {
@@ -1040,7 +1068,15 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
             "cooldown_hours": 48,
             "skip_recent_rounds": 9,
         },
+        "reflection": {
+            "memory_affect_anchor_enabled": True,
+            "relationship_weather_affect_anchor_enabled": False,
+        },
     }
+    reflection_engine = SimpleNamespace(
+        memory_affect_anchor_enabled=True,
+        relationship_weather_affect_anchor_enabled=False,
+    )
 
     async def fake_hot_update(_body):
         return "gateway_hot_reloaded"
@@ -1050,12 +1086,17 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
     monkeypatch.setattr(server, "config", cfg)
     monkeypatch.setattr(server, "_require_dashboard_auth", lambda request: None)
     monkeypatch.setattr(server, "_hot_update_gateway_config", fake_hot_update)
+    monkeypatch.setattr(server, "reflection_engine", reflection_engine)
 
     response = await server.api_config_update(
         DummyRequest(
             {
                 "dream": {"auto_enabled": False, "model": "dream-new"},
                 "gateway": {"cooldown_hours": 6, "skip_recent_rounds": 5},
+                "reflection": {
+                    "memory_affect_anchor_enabled": False,
+                    "relationship_weather_affect_anchor_enabled": True,
+                },
                 "persist": True,
             }
         )
@@ -1070,6 +1111,10 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
     assert runtime_config["dream"]["auto_enabled"] is False
     assert runtime_config["gateway"]["cooldown_hours"] == 6
     assert runtime_config["gateway"]["skip_recent_rounds"] == 5
+    assert runtime_config["reflection"]["memory_affect_anchor_enabled"] is False
+    assert runtime_config["reflection"]["relationship_weather_affect_anchor_enabled"] is True
+    assert reflection_engine.memory_affect_anchor_enabled is False
+    assert reflection_engine.relationship_weather_affect_anchor_enabled is True
 
 
 def test_chatgpt_oauth_provider_issues_single_use_codes():

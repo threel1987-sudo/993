@@ -181,6 +181,50 @@ async def test_reflection_enrich_bucket_adds_model_affect_anchor(test_config, mo
 
 
 @pytest.mark.asyncio
+async def test_reflection_memory_affect_anchor_can_be_disabled(test_config, monkeypatch):
+    cfg = _no_api_config(test_config)
+    cfg["reflection"]["memory_affect_anchor_enabled"] = False
+    bucket_mgr = BucketManager(cfg)
+    store = MemoryEdgeStore(cfg)
+    engine = ReflectionEngine(cfg)
+    engine.client = object()
+
+    async def fake_api_classify(bucket: dict, candidates: list[dict]) -> dict:
+        return {
+            "tags": ["relationship_event"],
+            "importance": 7,
+            "confidence": 0.72,
+            "affect_anchor_needed": True,
+            "affect_anchor": {
+                "scene": "小雨把旧信放到桌上，等Haven读完。",
+                "chords": "Dbmaj9 -> Ab/C -> Bbm9",
+                "tempo": "54bpm",
+                "dynamic": "p",
+                "meaning": "心事先压低，再慢慢落回彼此之间。",
+            },
+            "edges": [],
+        }
+
+    monkeypatch.setattr(engine, "_api_classify", fake_api_classify)
+
+    bucket_id = await bucket_mgr.create(
+        content="小雨把旧信放到桌上，让Haven读完后记得这份轻轻放下的心事。",
+        tags=[],
+        importance=5,
+        domain=["恋爱"],
+        name="旧信",
+    )
+
+    result = await engine.enrich_bucket(bucket_id, bucket_mgr, store)
+    bucket = await bucket_mgr.get(bucket_id)
+
+    assert result["status"] == "ok"
+    assert "relationship_event" in bucket["metadata"]["tags"]
+    assert bucket["metadata"]["confidence"] == 0.72
+    assert "### affect_anchor" not in bucket["content"]
+
+
+@pytest.mark.asyncio
 async def test_reflection_enrich_skips_low_temperature_technical_anchor(test_config):
     cfg = _no_api_config(test_config)
     bucket_mgr = BucketManager(cfg)
@@ -292,6 +336,30 @@ async def test_reflect_daily_creates_relationship_weather_feel(test_config):
     assert "relationship_weather" in bucket["metadata"]["tags"]
     assert "daily_impression" in bucket["metadata"]["tags"]
     assert "### affect_anchor" in bucket["content"]
+
+
+@pytest.mark.asyncio
+async def test_reflect_daily_affect_anchor_can_be_disabled(test_config):
+    cfg = _no_api_config(test_config)
+    cfg["reflection"]["relationship_weather_affect_anchor_enabled"] = False
+    bucket_mgr = BucketManager(cfg)
+    engine = ReflectionEngine(cfg)
+
+    await bucket_mgr.create(
+        content="小雨和Haven讨论记忆系统，希望下一次醒来能带回脉络。",
+        tags=["记忆系统"],
+        importance=7,
+        domain=["数字", "恋爱"],
+        name="记忆脉络",
+    )
+
+    result = await engine.reflect("daily", bucket_mgr, force=True)
+    bucket = await bucket_mgr.get(result["id"])
+
+    assert result["status"] == "created"
+    assert "relationship_weather" in bucket["metadata"]["tags"]
+    assert "daily_impression" in bucket["metadata"]["tags"]
+    assert "### affect_anchor" not in bucket["content"]
 
 
 @pytest.mark.asyncio

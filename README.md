@@ -905,7 +905,29 @@ source=deleted
 
 ## 维护命令
 
+这些脚本默认在仓库根目录运行。VPS/Linux 直接用 `bash`；Windows 本地测试可用 Git Bash。常用环境变量：
+
+- `COMPOSE_FILE`：指定 compose 文件。`one_click.sh` 首次部署会生成 `compose.local.yml`；VPS 旧部署常用 `compose.hk.yml`。不填时会按 `compose.local.yml` → `compose.hk.yml` → `docker-compose.user.yml` → `docker-compose.yml` 自动找。
+- `OMBRE_SERVICE`：容器服务名，默认 `ombre-brain`。
+- `GATEWAY_SERVICE`：Gateway 容器服务名，默认 `ombre-gateway`。
+- `BATCH_SIZE`：embedding 每批处理数量，默认 `20`。
+- `HEALTH_URL`：健康检查地址，不填时 `compose.hk.yml` 默认查 `http://127.0.0.1:18001/health`，用户版 compose 默认查 `http://127.0.0.1:8000/health`。
+- `LOG_TAIL`：`doctor.sh` 查看最近日志的行数，默认 `160`。
+- `YES=1`：跳过重建 embedding 的确认提示；清理孤儿 embedding 仍建议手动确认。
+
 ```bash
+# 一键菜单：首次部署、更新、排障、向量库相关、原版迁移
+bash scripts/one_click.sh
+
+# 同上，短入口
+./ob
+
+# 一键排障：检查 key、服务、端口、健康接口和最近错误日志
+COMPOSE_FILE=compose.hk.yml bash scripts/doctor.sh
+
+# 一键更新：拉代码、重建/更新容器、健康检查
+COMPOSE_FILE=compose.hk.yml bash scripts/update_deploy.sh
+
 # 服务状态
 docker compose -f compose.hk.yml ps
 docker compose -f compose.hk.yml logs --tail=120 ombre-brain
@@ -918,13 +940,79 @@ curl -sS http://127.0.0.1:18002/health
 # embedding 回填
 docker compose -f compose.hk.yml exec -T ombre-brain python backfill_embeddings.py --batch-size 20
 
+# 一键补缺失 embedding
+COMPOSE_FILE=compose.hk.yml bash scripts/embedding_backfill.sh
+
+# 一键重建所有 embedding（会消耗较多 embedding API 次数）
+COMPOSE_FILE=compose.hk.yml bash scripts/embedding_rebuild.sh
+
+# 一键检查孤儿 embedding，确认后清理
+COMPOSE_FILE=compose.hk.yml bash scripts/embedding_cleanup_orphans.sh
+
+# 导入重复桶清理/去重
+# 不要直接删除全部 buckets；优先在 Dashboard -> 导入 -> 导入结果里删除/标为噪声。
+# 如果必须批量手动删除 bucket 文件，先备份 buckets/state。
+docker compose -f compose.hk.yml exec -T ombre-brain sh -lc 'mkdir -p /state/backups && tar -czf "/state/backups/before-import-dedupe-$(date +%Y%m%d_%H%M%S).tar.gz" /data /state'
+# 扫描重复桶；会打印前两句话和相似度，默认不会自动删近似重复。
+docker compose -f compose.hk.yml exec -T ombre-brain python scripts/cleanup_duplicate_buckets.py
+# 人工逐组确认：exact duplicate 可按组删；相似度 >=80% 的疑似重复按 y/1/2 选择。
+docker compose -f compose.hk.yml exec -T ombre-brain python scripts/cleanup_duplicate_buckets.py --interactive --near-threshold 80
+# 一键删除只处理 exact duplicate 中安全的一份，并清对应 embedding。
+docker compose -f compose.hk.yml exec -T ombre-brain python scripts/cleanup_duplicate_buckets.py --delete --yes
+# 如果你已经手动删除过 bucket 文件，再清没有对应 bucket 文件的 orphan embeddings。
+docker compose -f compose.hk.yml exec -T ombre-brain python scripts/cleanup_orphan_embeddings.py --delete --yes
+# Python 直跑同理：
+python scripts/cleanup_duplicate_buckets.py
+python scripts/cleanup_duplicate_buckets.py --interactive --near-threshold 80
+python scripts/cleanup_duplicate_buckets.py --delete --yes
+python scripts/cleanup_orphan_embeddings.py --delete --yes
+
 # enrich 补跑
 # 正常情况下 reflection scheduler 会自动少量补跑；需要手动修复时可从 MCP 客户端调用 enrich_backfill(limit=20)。
 
-# 旧 feel 桶清理，先 dry-run 再 apply
+# 旧 feel -> 年轮迁移，建议优先走 one_click.sh 的“从原版 Ombre-Brain 迁移”
+docker compose -f compose.hk.yml exec -T ombre-brain sh -lc 'PYTHONIOENCODING=utf-8 python scripts/plan_feel_comment_backfill.py --mapping-template /state/feel_comment_backfill_mapping.json --review-markdown /state/feel_comment_backfill_review.md > /state/feel_comment_backfill_plan.json'
+docker compose -f compose.hk.yml exec -T ombre-brain sh -lc 'PYTHONIOENCODING=utf-8 python scripts/review_feel_comment_backfill.py --plan /state/feel_comment_backfill_plan.json --mapping /state/feel_comment_backfill_mapping.json'
+docker compose -f compose.hk.yml exec -T ombre-brain python scripts/apply_feel_comment_backfill.py --mapping /state/feel_comment_backfill_mapping.json
+docker compose -f compose.hk.yml exec -T ombre-brain python scripts/apply_feel_comment_backfill.py --mapping /state/feel_comment_backfill_mapping.json --apply --archive-feel --refresh-embeddings
 docker compose -f compose.hk.yml exec -T ombre-brain python scripts/cleanup_migrated_feel_buckets.py
 docker compose -f compose.hk.yml exec -T ombre-brain python scripts/cleanup_migrated_feel_buckets.py --apply
 ```
+
+脚本用途：
+
+- `scripts/one_click.sh`：新手入口。菜单包含首次部署、更新版本、错误排查、向量库相关、从原版 Ombre-Brain 迁移。首次部署会先选择 `VPS / Windows / Python 直跑`，再选择 `只用 Ombre MCP 部分 / 部署全部`。只用 MCP 时只启动 MCP 工具和 Dashboard，不配置、不启动 Gateway；部署全部时才会继续填写 Gateway 上游、token 和 OpenAI-compatible 客户端地址。VPS 和 Windows 走 Docker 并生成本机专用的 `compose.local.yml`；Python 直跑适合手机 Termux、Linux、Windows 无 Docker，会生成 `start_local.sh` 和 `start_local.ps1`，同时保留 `start_mobile.sh` 兼容旧教程。模型配置和 key 会交互式填写，key 写入 `.env`，非密钥配置写入 `config.yaml`，最后生成 `connection_guide.txt` 告诉客户端 URL 怎么填。
+- `./ob`：短入口，等同于 `bash scripts/one_click.sh`。也可以在菜单里选“安装短命令 ob”，写入当前用户的 shell 配置；之后任意位置输入 `ob` 就能打开菜单。
+- Windows 上运行 `.sh` 脚本建议打开 Git Bash 再执行；不要在 PowerShell 里直接输 `bash ...`，否则少数机器可能会调用到 WSL 的 `bash.exe`。
+- `scripts/doctor.sh`：适合“更新后不能用、端口不通、怀疑 key 没配好”。它只读检查，不会重启服务、不改配置、不打印 key。会提示 `.env/config.yaml`、Docker Compose 状态、健康接口、容器内环境变量和最近错误日志；如果 compose 里没有启用 Gateway，会自动跳过 Gateway token 检查。
+- `scripts/update_deploy.sh`：适合“我只想更新到最新版”。它会 `git pull --ff-only`，如果 compose 里是 `build:` 就重建镜像，否则先 pull 镜像，再启动容器，最后做健康检查。
+- `scripts/embedding_backfill.sh`：只补缺失的 embedding，适合升级后发现部分记忆没有语义召回。
+- `scripts/embedding_rebuild.sh`：重建全部 embedding，适合 embedding 模型、base_url 或 embedding 文本格式改过之后使用。它会消耗更多 API 次数。
+- `scripts/embedding_cleanup_orphans.sh`：检查 `embeddings.db` 里已经没有对应 bucket 文件的记录，并要求输入确认后删除；确认已备份且要非交互执行时可追加 `--yes`。
+- Python 直跑用户可以从 `scripts/one_click.sh` 的“向量库相关”菜单执行补向量、重建向量、清孤儿向量和导入重复桶清理，不需要 Docker Compose。
+- 导入重复桶清理：不要直接删全部桶。优先在 Dashboard 的“导入 -> 导入结果”里删除/标为噪声；需要批量处理时先备份 `buckets/state`，再用 `scripts/cleanup_duplicate_buckets.py` 扫描。扫描结果会打印重复桶前两句话和相似度；`--interactive --near-threshold 80` 会逐组确认，疑似重复按 `y` 删除建议项、按 `1/2` 删除左/右；`--delete --yes` 只会一键删除 exact duplicate 中安全的一份并清对应 embedding。
+- 原版迁移菜单：先检查旧部署、备份 buckets/state，再生成旧 `feel` 审阅表和 mapping。如果二改版目录和原版目录不同，可以选“备份指定原版目录”，手动填写原版仓库路径，脚本会只打包其中的 `buckets/`、`state/`、`config.yaml`、`.env`。可以逐条输入 `y` 接受候选源记忆，输入 `n` 自己填源记忆 bucket id，或输入 `w` 保留为 whisper/无源 feel。旧 `feel` 写入年轮前必须预演 mapping；清理旧独立 `feel` 前也会要求先看 dry-run。
+
+`doctor.sh` 常见结论：
+
+- `OMBRE_API_KEY 未配置`：导入抽取/脱水模型大概率不能调用。把 key 写进 `.env` 后重新 `docker compose up -d`。
+- `OMBRE_EMBEDDING_API_KEY 未配置`：embedding 可能回退到脱水 key；如果你的 embedding 服务和脱水服务不是同一个站点，请单独配置。
+- `服务没有运行`：先执行 `COMPOSE_FILE=compose.hk.yml bash scripts/update_deploy.sh`。
+- `默认健康地址不通，但其它端口通`：客户端或反代地址可能写错，按脚本提示的可用端口改配置。
+- `401/403`：通常是 key 或鉴权 token 错；`429` 是额度/频率限制；`connection refused/timeout` 多半是上游地址或网络问题。
+
+`one_click.sh` 的 Gateway 上游配置支持：
+
+- 单上游或多上游 provider。
+- 每个 provider 可选单 key 或多 key，多 key 会写成 `api_key_envs`。
+- 如果多个 provider 暴露了同名模型，脚本会自动把 Gateway 里显示的模型名改成 `provider/模型名`，同时保留 `upstream_model` 指向真实模型名，避免路由撞名。
+
+`one_click.sh` 的客户端提示会按部署环境和功能范围给 URL：
+
+- 只用 MCP：客户端只填 MCP 工具 URL，例如 `http://你的公网IP或域名:18001/mcp`；Dashboard 是 `http://你的公网IP或域名:18001/dashboard`。不会输出 Gateway Base URL。
+- 部署全部：除了 MCP URL，还会输出 Gateway Base URL，例如 VPS 默认是 `http://你的公网IP或域名:18002/v1`。
+- Windows：客户端在同一台电脑就填 `127.0.0.1`；手机连 Windows 时填 Windows 的局域网 IP，并允许防火墙通过脚本提示的端口。
+- Python 直跑：同一台机器/手机填 `127.0.0.1`；其它设备连接时填运行 Ombre 的机器局域网 IP。Linux、Termux、Git Bash 用 `./start_local.sh`，Windows PowerShell 用 `powershell -ExecutionPolicy Bypass -File .\start_local.ps1`。
 
 ## 本地开发与测试
 

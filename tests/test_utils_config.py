@@ -10,6 +10,8 @@ def test_load_config_defaults_relationship_weather_off(tmp_path):
     assert config["write_path"]["semantic_search_timeout_seconds"] == 3
     assert config["reflection"]["enrich_backfill_enabled"] is True
     assert config["reflection"]["enrich_backfill_limit"] == 5
+    assert config["reflection"]["memory_affect_anchor_enabled"] is True
+    assert config["reflection"]["relationship_weather_affect_anchor_enabled"] is True
     assert config["dream"]["old_echo_enabled"] is True
     assert config["dream"]["old_echo_min_age_hours"] == 72
 
