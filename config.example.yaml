@@ -91,7 +91,7 @@ persona:
   mode: "llm"
   base_url: "https://api.deepseek.com/v1"
   model: "deepseek-chat"
-  api_key: ""
+  api_key: "sk-e6eb76e2a80c4997b21c2c5593ea7e38"
   thinking_mode: ""
   temperature: 0.1
   max_tokens: 500
@@ -101,27 +101,28 @@ persona:
   max_relationship_delta: 0.03
   max_affect_delta: 0.18
   initial_personality:
-    openness: 0.56
-    conscientiousness: 0.50
-    extraversion: 0.44
-    agreeableness: 0.66
-    neuroticism: 0.36
+    openness: 0.52
+    conscientiousness: 0.45
+    extraversion: 0.40
+    agreeableness: 0.38
+    neuroticism: 0.58
   initial_relationship:
-    affinity: 0.86
-    dominance: 0.38
-    defensiveness: 0.12
-    trust: 0.82
+    affinity: 0.88
+    dominance: 0.62
+    defensiveness: 0.18
+    trust: 0.80
   initial_affect:
-    valence: 0.56
-    arousal: 0.34
-    tenderness: 0.62
-    possessiveness: 0.24
-    longing: 0.34
-    security: 0.68
-    protective_drive: 0.52
+    valence: 0.58
+    arousal: 0.42
+    tenderness: 0.55
+    possessiveness: 0.72
+    longing: 0.58
+    security: 0.60
+    protective_drive: 0.68
     mood_label: "warm_neutral"
-    session_defensiveness: 0.12
+    session_defensiveness: 0.15
     residue: ""
+
 
 reflection:
   enabled: true
