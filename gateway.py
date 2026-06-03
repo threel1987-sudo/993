@@ -829,6 +829,12 @@ class GatewayService:
         assistant_message: dict[str, Any] | None,
         recalled_ids: list[str],
     ) -> None:
+        logger.info(
+            "Persona post-reply update starting | session=%s recalled=%s",
+            session_id,
+            len(recalled_ids or []),
+        )
+
         if not user_message.strip():
             logger.info(
                 "Persona post-reply update skipped | session=%s reason=missing_user_message",
