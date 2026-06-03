@@ -81,7 +81,7 @@ class PersonaStateEngine:
         )
         self.temperature = float(self.persona_cfg.get("temperature", 0.1))
         configured_max_tokens = int(self.persona_cfg.get("max_tokens", 1200))
-        self.max_tokens = max(1200, configured_max_tokens)
+        self.max_tokens = max(3000, configured_max_tokens)
         self.session_mood_half_life_minutes = float(
             self.persona_cfg.get("session_mood_half_life_minutes", 90)
         )
@@ -464,9 +464,10 @@ class PersonaStateEngine:
             if parsed is None:
                 raw_preview = (raw or "")[:500].replace("\n", "\\n")
                 logger.warning(
-                    "Persona evaluator returned malformed JSON finish_reason=%s raw_len=%s raw_preview=%r",
+                    "Persona evaluator returned malformed JSON finish_reason=%s raw_len=%s max_tokens=%s raw_preview=%r",
                     finish_reason,
                     len(raw or ""),
+                    self.max_tokens,
                     raw_preview,
                 )
                 return None, raw or "", f"persona LLM returned malformed JSON finish_reason={finish_reason}"
