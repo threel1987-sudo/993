@@ -444,7 +444,20 @@ class PersonaStateEngine:
         tool_summary: str,
     ) -> tuple[dict | None, str, str | None]:
         if self.mode != "llm" or not self.client:
+            logger.info(
+                "Persona evaluator skipped | mode=%s client_ready=%s",
+                self.mode,
+                bool(self.client),
+            )
             return None, "", "persona LLM is not configured"
+
+        logger.info(
+            "Persona evaluator call starting | model=%s base_url=%s max_tokens=%s",
+            self.model,
+            self.base_url,
+            self.max_tokens,
+        )
+
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -481,6 +494,11 @@ class PersonaStateEngine:
                     raw_preview,
                 )
                 return None, raw or "", f"persona LLM returned malformed JSON finish_reason={finish_reason}"
+            logger.info(
+                "Persona evaluator parsed JSON | finish_reason=%s raw_len=%s",
+                finish_reason,
+                len(raw or ""),
+            )
             return self._normalize_evaluation(parsed), raw or "", None
         except Exception as exc:
             logger.warning("Persona evaluation failed: %s", exc)
