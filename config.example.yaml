@@ -20,7 +20,7 @@ identity:
     - "亲爱的"
 
 dehydration:
-  model: "deepseek-ai/DeepSeek-V4-Pro"
+  model: "deepseek-ai/DeepSeek-V4-Flash"
   base_url: "https://api.siliconflow.cn/v1"
   api_key: "sk-zysgrymkzlusmawyeeacjqnofqycrxaljxjmjpxfdqlcpbky"
   thinking_mode: ""
@@ -89,9 +89,9 @@ persona:
   enabled: true
   profile_id: "haven_ake"
   mode: "llm"
-  base_url: "https://api.deepseek.com/v1"
-  model: "deepseek-v4-pro"
-  api_key: "sk-e6eb76e2a80c4997b21c2c5593ea7e38"
+  base_url: "https://api.siliconflow.cn/v1"
+  model: "deepseek-ai/DeepSeek-V4-Flash"
+  api_key: "sk-zysgrymkzlusmawyeeacjqnofqycrxaljxjmjpxfdqlcpbky"
   thinking_mode: ""
   temperature: 0.1
   max_tokens: 500
@@ -132,9 +132,9 @@ reflection:
   relationship_weather_affect_anchor_enabled: true
   enrich_backfill_enabled: true
   enrich_backfill_limit: 10
-  base_url: "https://api.deepseek.com/v1"
-  model: "deepseek-v4-pro"
-  api_key: "sk-e6eb76e2a80c4997b21c2c5593ea7e38"
+  base_url: "https://api.siliconflow.cn/v1"
+  model: "deepseek-ai/DeepSeek-V4-Flash"
+  api_key: "sk-zysgrymkzlusmawyeeacjqnofqycrxaljxjmjpxfdqlcpbky"
   thinking_mode: ""
   temperature: 0.1
   max_tokens: 700
@@ -157,9 +157,9 @@ dream:
   enabled: true
   auto_enabled: true
   surface_enabled: true
-  base_url: "https://api.deepseek.com/v1"
-  model: "deepseek-v4-flash"
-  api_key: "sk-e6eb76e2a80c4997b21c2c5593ea7e38"
+  base_url: "https://api.siliconflow.cn/v1"
+  model: "deepseek-ai/DeepSeek-V4-Flash"
+  api_key: "sk-zysgrymkzlusmawyeeacjqnofqycrxaljxjmjpxfdqlcpbky"
   thinking_mode: "disabled"
   temperature: 0.85
   max_tokens: 900
