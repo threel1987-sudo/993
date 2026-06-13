@@ -1924,7 +1924,7 @@ class GatewayService:
         for bucket in all_buckets:
             meta = bucket.get("metadata", {})
             tags = {str(tag) for tag in meta.get("tags", [])}
-            if "haven_favorite" not in tags:
+            if "阿克_favorite" not in tags:
                 continue
             if not self._has_favorite_reason(bucket.get("content", "")):
                 continue
