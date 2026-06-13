@@ -1592,7 +1592,7 @@ const BASE = location.origin + PATH_PREFIX;
 let allBuckets = [];
 let currentFilter = 'all';
 let dashboardCommentAuthor = 'Rain';
-let dashboardAiAuthor = 'Haven';
+let dashboardAiAuthor = '阿克';
 let reflectionSelectedDate = formatLocalDate(new Date());
 let reflectionCurrentMonth = monthStart(new Date());
 
@@ -1938,7 +1938,7 @@ async function loadDreams() {
       return;
     }
     content.innerHTML = '<div class="dream-list">' + records.map(function(record) {
-      var aiName = record.ai_name || dashboardAiAuthor || 'Haven';
+      var aiName = record.ai_name || dashboardAiAuthor || '阿克';
       return '<div class="dream-row">' +
         '<div class="dream-row-title">' + formatDreamDate(record) + ' ' + esc(aiName) + ' 做了一个梦</div>' +
         '<div class="dream-row-status">' + dreamStatusLabel(record.status) + '</div>' +
