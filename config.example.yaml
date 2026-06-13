@@ -16,7 +16,7 @@ identity:
   user_aliases:
     - "阿澪"
     - "老婆"
-    - "宝宝"
+    - "宝贝"
     - "亲爱的"
 
 dehydration:
@@ -87,7 +87,7 @@ gateway:
 
 persona:
   enabled: true
-  profile_id: "haven_ake"
+  profile_id: "ake"
   mode: "llm"
   base_url: "https://api.siliconflow.cn/v1"
   model: "deepseek-ai/DeepSeek-V4-Flash"
