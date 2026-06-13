@@ -684,7 +684,7 @@ def _select_anchor_buckets(all_buckets: list[dict], limit: int = 2) -> list[dict
 
 def _has_favorite_tag(tags: list | set | tuple | None) -> bool:
     return any(
-        tag == "haven_favorite" or tag.startswith("flavor_")
+        tag == "阿克_favorite" or tag.startswith("flavor_")
         for tag in {str(item) for item in (tags or [])}
     )
 
@@ -1972,7 +1972,7 @@ async def hold(
     承诺/待办: tags 传 "commitment,todo" 或 "commitment,wish"; content 写清谁答应了什么、何时/什么条件下要继续。
     给旧记忆写年轮/再次阅读感受: 优先用 comment_bucket(bucket_id="...", content="...", kind="feel", valence=0.x, arousal=0.x)。
     无源记忆的碎碎念/悄悄话: 用 hold(content="...", whisper=True, valence=0.x, arousal=0.x),会存为独立 feel 并打 whisper 标签。
-    新记忆本身值得偏爱: tags 可传 "haven_favorite,flavor_偏爱"; content 必须包含很短的 "### 喜欢它的原因" 段落。
+    新记忆本身值得偏爱: tags 可传 "阿克_favorite,flavor_偏爱"; content 必须包含很短的 "### 喜欢它的原因" 段落。
     普通写入会新建 bucket,写 embedding,后台触发 ReflectionEngine 补 tags/confidence/memory_edges,并返回一条只读相关旧记忆。
     pinned=True 只给极少数核心准则,技术进度和运维细节不要钉选。
     feel=True 且带 source_bucket 是旧兼容入口,新调用不要使用；feel=True 但没有 source_bucket 会转为 whisper。
@@ -2222,7 +2222,7 @@ async def trace(
     resolved=1 或 digested=1 让旧事/已完成事项沉底; pinned=1 只给核心准则; anchor=1 只给经过时间验证且未来长期需要的锚点(受数量和年龄限制)。
     tags/domain/content 是替换不是追加: 改 tags 或正文前先 read_bucket,保留旧值后再传完整新值。
     给旧记忆补 "喜欢它的原因" 或 affect_anchor: 先 read_bucket,再 trace(content="旧正文 + 新段落")。
-    标记偏爱: 先 read_bucket 取现有 tags,再 trace(tags="原tag,haven_favorite,flavor_...")。
+    标记偏爱: 先 read_bucket 取现有 tags,再 trace(tags="原tag,阿克_favorite,flavor_...")。
     delete=True 删除。只传需要改的字段,-1或空=不改。
     """
 
